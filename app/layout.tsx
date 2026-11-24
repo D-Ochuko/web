@@ -10,6 +10,7 @@ import StorageBootstrap from '@/components/StorageBootstrap'
 import NotificationNavigationRegistrar from '@/components/NotificationNavigationRegistrar'
 import AuthRequiredPrompt from '@/components/AuthRequiredPrompt'
 import SyncRetryRunner from '@/components/SyncRetryRunner'
+import AlertSyncRunner from '@/components/AlertSyncRunner'
 import { ToastProvider } from '@/components/ToastProvider'
 import { links } from '@/lib/links'
 
@@ -40,6 +41,7 @@ export default function RootLayout({
           <NotificationNavigationRegistrar />
           <AuthRequiredPrompt />
           <SyncRetryRunner />
+          <AlertSyncRunner />
           <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-50">
             <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
               <Link
