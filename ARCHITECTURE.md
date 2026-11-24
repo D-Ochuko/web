@@ -24,7 +24,7 @@ This document maps key files and directories to their functional areas, helping 
 | `ContractCard.tsx`     | Contract summary card — displays contract info, network badge    |
 | `RuleBuilder.tsx`      | Alert rule configuration — form inputs for all rule types        |
 | `AlertRuleBadge.tsx`   | Rule type display — badge styling and labels for each rule type  |
-| `WebhookLog.tsx`       | Webhook delivery history table — status, timestamps, retry info  |
+| `WebhookLog.tsx`       | Webhook delivery history table — status, timestamps, retry info   |
 | `NetworkBadge.tsx`     | Network indicator — Mainnet/Testnet/Futurenet badge              |
 | `CopyButton.tsx`       | Clipboard utility — copy contract ID, transaction hash           |
 | `MobileNav.tsx`        | Mobile navigation drawer — responsive menu                       |
@@ -90,10 +90,22 @@ This document maps key files and directories to their functional areas, helping 
 | `README.md`              | Project overview, setup, tech stack, integration guide                 |
 | `CONTRIBUTING.md`        | Contribution guidelines, branch naming, commit style, PR checklist    |
 
-## Alert Polling & Notifications
+## Alert Polling
 
-Alert polling is driven by `startAlertPolling` (see `hooks/useAlertSync.ts`).
+Alert polling is driven by `lib/startAlertPolling.ts` (per-contract poll loops) and consumed by `hooks/useAlertSync.ts`.
 
-- **Foreground (visible tab):** polls at the normal interval and delivers in-page alerts plus browser notifications.
-- **Background (hidden tab):** when browser notifications are enabled, polling continues at a slower interval (~2 minutes) so notifications can still arrive while the user is looking elsewhere. A single leader tab (elected via `BroadcastChannel`/`localStorage`, see #43) performs background polling to avoid duplicate notifications across tabs.
-- **Known limit:** polling cannot run when the browser is fully closed, so no notifications are delivered in that case. Web Push is tracked as a follow-up to cover closed-browser delivery.
+### Jitter
+
+`nextPollDelay` applies ±20% random jitter to the base 30 s interval so that many watched contracts (and many clients) do not all poll in lock-step. This spreads load and prevents synchronized retry storms after a core outage.
+
+### Batched requests (assumed core route)
+
+Polling prefers a batched request:
+
+```
+GET /alerts?contracts=<id:net,…>&since=<cursor>
+```
+
+> **Note:** This is an **assumed core route** — it is not yet guaranteed by stellar-txwatch-core. The client treats it as best-effort.
+
+If the batched route is unavailable (404/405) or fails, the client falls back to per-contract polling (`GET /alerts?contract=<id>&network=<net>&since=<cursor>`) so behavior degrades gracefully until the core route lands.
