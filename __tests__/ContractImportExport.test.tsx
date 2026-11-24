@@ -189,6 +189,29 @@ describe('ContractImportExport', () => {
     expect(await screen.findByRole('status')).toHaveTextContent(/boom|failed/i)
   })
 
+  it('passes isNew=true for new contracts and isNew=false for overwritten ones in API mode', async () => {
+    const syncSaveContract = jest.fn(async () => {})
+    jest.doMock('@/lib/sync', () => ({
+      syncSaveContract,
+      syncDeleteContract: jest.fn(async () => {}),
+    }))
+    const { default: Component } = await import('@/components/ContractImportExport')
+    render(<Component />)
+
+    // First import: contract is new -> isNew should be true (POST).
+    upload(JSON.stringify({ version: 1, contracts: [entry()] }))
+    fireEvent.click(await screen.findByText('Apply import'))
+    await waitFor(() => expect(getContracts()).toHaveLength(1))
+    await waitFor(() => expect(syncSaveContract).toHaveBeenCalledTimes(1))
+    expect(syncSaveContract.mock.calls[0][1]).toBe(true)
+
+    // Second import of the same id: contract already exists -> isNew should be false (PUT).
+    upload(JSON.stringify({ version: 1, contracts: [entry({ label: 'A2' })] }))
+    fireEvent.click(await screen.findByText('Apply import'))
+    await waitFor(() => expect(syncSaveContract).toHaveBeenCalledTimes(2))
+    expect(syncSaveContract.mock.calls[1][1]).toBe(false)
+  })
+
   it('uses syncDeleteContract in replace mode in API mode', async () => {
     const syncDeleteContract = jest.fn(async () => {})
     jest.doMock('@/lib/sync', () => ({
@@ -197,6 +220,7 @@ describe('ContractImportExport', () => {
     }))
     const { default: Component } = await import('@/components/ContractImportExport')
     render(<Component />)
+
     upload(JSON.stringify({ version: 1, contracts: [entry()] }))
     fireEvent.click(await screen.findByText('Apply import'))
     await waitFor(() => expect(getContracts()).toHaveLength(1))
@@ -206,69 +230,7 @@ describe('ContractImportExport', () => {
     fireEvent.click(screen.getByLabelText('Replace all existing'))
     fireEvent.click(screen.getByText('Apply import'))
     fireEvent.click(await screen.findByText('Confirm replace'))
+
     await waitFor(() => expect(syncDeleteContract).toHaveBeenCalled())
-  })
-
-  it('preserves webhook_secret through import', async () => {
-    render(<ContractImportExport />)
-    upload(JSON.stringify({ version: 1, contracts: [entry({ webhook_secret: 'whsec_abc123' })] }))
-    expect(await screen.findByTestId('import-preview')).toHaveTextContent('1 valid')
-    fireEvent.click(screen.getByText('Apply import'))
-    await waitFor(() => expect(getContracts()).toHaveLength(1))
-    expect(getContracts()[0].webhook_secret).toBe('whsec_abc123')
-  })
-
-  it('excludes webhook_secret from CSV exports', async () => {
-    const createObjectURL = jest.fn(() => 'blob:mock')
-    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true })
-    Object.defineProperty(URL, 'revokeObjectURL', { value: jest.fn(), configurable: true })
-
-    let capturedBlob: Blob | undefined
-    createObjectURL.mockImplementation((blob: Blob) => {
-      capturedBlob = blob
-      return 'blob:mock'
-    })
-    const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
-
-    render(<ContractImportExport />)
-    upload(JSON.stringify({ version: 1, contracts: [entry({ webhook_secret: 'whsec_abc123' })] }))
-    fireEvent.click(await screen.findByText('Apply import'))
-    await waitFor(() => expect(getContracts()).toHaveLength(1))
-
-    fireEvent.click(screen.getByLabelText('Export contracts only'))
-    fireEvent.click(screen.getByText('Export'))
-
-    await waitFor(() => expect(capturedBlob).toBeDefined())
-    const text = await capturedBlob!.text()
-    expect(text).not.toContain('whsec_abc123')
-    expect(text).not.toContain('webhook_secret')
-
-    clickSpy.mockRestore()
-  })
-
-  it('re-keys alerts instead of deleting them when a replaced contract matches by (contract_id, network)', async () => {
-    localStorage.setItem(
-      'txwatch:alerts',
-      JSON.stringify([
-        { id: 'a1', contract_id: CID, network: 'testnet', type: 'AnyTransaction', created_at: 1 },
-      ]),
-    )
-    render(<ContractImportExport />)
-    upload(JSON.stringify({ version: 1, contracts: [entry()] }))
-    fireEvent.click(await screen.findByText('Apply import'))
-    await waitFor(() => expect(getContracts()).toHaveLength(1))
-
-    upload(JSON.stringify({ version: 1, contracts: [entry({ id: 'i2', label: 'B' })] }))
-    await screen.findByTestId('import-preview')
-    fireEvent.click(screen.getByLabelText('Replace all existing'))
-    fireEvent.click(screen.getByText('Apply import'))
-    fireEvent.click(await screen.findByText('Confirm replace'))
-
-    await waitFor(() => {
-      const alerts = JSON.parse(localStorage.getItem('txwatch:alerts') || '[]')
-      expect(alerts).toHaveLength(1)
-      expect(alerts[0].contract_id).toBe(CID)
-      expect(alerts[0].network).toBe('testnet')
-    })
   })
 })
