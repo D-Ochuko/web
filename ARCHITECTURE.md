@@ -76,10 +76,10 @@ This document maps key files and directories to their functional areas, helping 
 | File                 | Responsibility                          |
 | -------------------- | --------------------------------------- |
 | `package.json`       | Dependencies, scripts, project metadata |
-| `tsconfig.json`      | TypeScript configuration                |
+| `tsconfig.json`      | TypeScript configuration                 |
 | `tailwind.config.ts` | Tailwind CSS theme, colors, spacing     |
 | `next.config.mjs`    | Next.js build configuration             |
-| `postcss.config.mjs` | PostCSS plugins (Tailwind)              |
+| `postcss.config.mjs` | PostCSS plugins                         |
 | `.eslintrc.json`     | ESLint rules for code quality           |
 | `.env.example`       | Environment variable template           |
 
@@ -88,73 +88,12 @@ This document maps key files and directories to their functional areas, helping 
 | File                     | Responsibility                                                         |
 | ------------------------ | ---------------------------------------------------------------------- |
 | `README.md`              | Project overview, setup, tech stack, integration guide                 |
-| `CONTRIBUTING.md`        | Contribution guidelines, branch naming, commit style, PR checklist     |
-| `docs/storage-schema.md` | Browser storage keys, persisted shapes, limits, and migration workflow |
-| `GLOSSARY.md`            | Terminology definitions for new contributors                           |
-| `LICENSE`                | MIT license                                                            |
+| `CONTRIBUTING.md`        | Contribution guidelines, branch naming, commit style, PR checklist    |
 
-## Feature Areas & Key Files
+## Alert Polling & Notifications
 
-### Wallet Integration
+Alert polling is driven by `startAlertPolling` (see `hooks/useAlertSync.ts`).
 
-**Primary**: `components/FreighterConnect.tsx`  
-**Secondary**: `lib/freighter.ts` (`@stellar/freighter-api` wrapper)  
-**Related**: `app/layout.tsx` (provider setup)
-
-### Contract Management
-
-**Primary**: `lib/storage.ts` (persistence), `lib/api.ts` (backend calls)  
-**Secondary**: `app/contracts/new/page.tsx` (registration form), `app/contracts/[id]/page.tsx` (detail view)  
-**Related**: `components/ContractCard.tsx`, `types/index.ts`
-
-### Alert Rules
-
-**Primary**: `components/RuleBuilder.tsx` (UI), `types/index.ts` (types)  
-**Secondary**: `app/contracts/[id]/page.tsx` (rule management)  
-**Related**: `components/AlertRuleBadge.tsx` (display)
-
-### Webhook Delivery
-
-**Primary**: `components/WebhookLog.tsx` (history display), `lib/api.ts` (test webhook)  
-**Secondary**: `app/contracts/[id]/page.tsx` (webhook settings)  
-**Related**: `types/index.ts` (WebhookLog type)
-
-### Stellar Network Integration
-
-**Primary**: `lib/stellar.ts` (all network queries)  
-**Secondary**: `lib/api.ts` (API calls), `types/index.ts` (network types)  
-**Related**: `components/NetworkBadge.tsx` (display)
-
-## When to Modify Each Area
-
-| Task                     | Files to Change                                                                 |
-| ------------------------ | ------------------------------------------------------------------------------- |
-| Add new alert rule type  | `types/index.ts`, `components/RuleBuilder.tsx`, `components/AlertRuleBadge.tsx` |
-| Add new page             | `app/*/page.tsx`, update `components/MobileNav.tsx`                             |
-| Add new component        | Create in `/components`, export from component file                             |
-| Add Stellar query        | Add function to `lib/stellar.ts`                                                |
-| Add backend API call     | Add function to `lib/api.ts`                                                    |
-| Add type definition      | Add to `types/index.ts` (keep in sync with Rust core)                           |
-| Update styling           | `tailwind.config.ts` or component `className`                                   |
-| Update environment setup | `.env.example`, `CONTRIBUTING.md`                                               |
-
-## Dependency Graph
-
-```
-Pages (app/*)
-  ↓
-Components (components/*)
-  ↓
-Business Logic (lib/*)
-  ↓
-Types (types/index.ts)
-  ↓
-External APIs (Stellar, Backend)
-```
-
-Most changes flow from types → logic → components → pages. When adding a feature:
-
-1. Define types in `types/index.ts`
-2. Add logic to `lib/stellar.ts` or `lib/api.ts`
-3. Create/update components in `/components`
-4. Wire into pages in `/app`
+- **Foreground (visible tab):** polls at the normal interval and delivers in-page alerts plus browser notifications.
+- **Background (hidden tab):** when browser notifications are enabled, polling continues at a slower interval (~2 minutes) so notifications can still arrive while the user is looking elsewhere. A single leader tab (elected via `BroadcastChannel`/`localStorage`, see #43) performs background polling to avoid duplicate notifications across tabs.
+- **Known limit:** polling cannot run when the browser is fully closed, so no notifications are delivered in that case. Web Push is tracked as a follow-up to cover closed-browser delivery.
