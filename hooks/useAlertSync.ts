@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { isApiConfigured, startAlertPolling } from '@/lib/alertSource'
 import type { AlertPayload, Network } from '@/types'
 
@@ -33,19 +33,30 @@ export function useAlertSync(
   })
   const [pollTrigger, setPollTrigger] = useState(0)
 
+  // Hold the latest onNew in a ref so the polling effect always calls the
+  // current callback (e.g. after the contract is renamed) without restarting.
+  const onNewRef = useRef(onNew)
+  onNewRef.current = onNew
+
   const syncNow = () => setPollTrigger(p => p + 1)
 
   useEffect(() => {
-    if (!contractId || !network || !isApiConfigured()) return
+    if (!contractId || !network || !isApiConfigured()) {
+      setState((s) => ({ ...s, live: false, enabled: false }))
+      return
+    }
     setState((s) => ({ ...s, enabled: true }))
-    return startAlertPolling(contractId, network, {
+    const stop = startAlertPolling(contractId, network, {
       onSync: (fresh, at) => {
         setState({ live: true, lastSync: at, enabled: true })
-        if (fresh.length) onNew?.(fresh)
+        if (fresh.length) onNewRef.current?.(fresh)
       },
       onError: () => setState((s) => ({ ...s, live: false })),
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      stop()
+      setState((s) => ({ ...s, live: false, enabled: false }))
+    }
   }, [contractId, network, pollTrigger])
 
   return { ...state, syncNow }
