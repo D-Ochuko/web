@@ -50,6 +50,34 @@ export function parseRetryAfter(
   return Number.isNaN(date) ? undefined : Math.max(0, date - now)
 }
 
+/**
+ * Extract a human-readable message from a parsed error body. Handles plain
+ * `message`/`error` strings, nested `error.message`, `errors[0].message`, and
+ * RFC 7807 `detail`. Returns `undefined` when no string message is found.
+ */
+export function extractErrorMessage(body: unknown): string | undefined {
+  if (typeof body === 'string') return body || undefined
+  if (!body || typeof body !== 'object') return undefined
+  const obj = body as Record<string, unknown>
+  if (typeof obj.message === 'string' && obj.message) return obj.message
+  if (typeof obj.error === 'string' && obj.error) return obj.error
+  if (obj.error && typeof obj.error === 'object') {
+    const nested = (obj.error as Record<string, unknown>).message
+    if (typeof nested === 'string' && nested) return nested
+  }
+  if (Array.isArray(obj.errors)) {
+    const first = obj.errors[0]
+    if (first && typeof first === 'object') {
+      const nested = (first as Record<string, unknown>).message
+      if (typeof nested === 'string' && nested) return nested
+    } else if (typeof first === 'string' && first) {
+      return first
+    }
+  }
+  if (typeof obj.detail === 'string' && obj.detail) return obj.detail
+  return undefined
+}
+
 export async function apiFetch<T>(
   path: string,
   options?: RequestInit & { timeoutMs?: number }
@@ -87,7 +115,7 @@ export async function apiFetch<T>(
       if (text) {
         try {
           const body = JSON.parse(text)
-          message = body?.message || body?.error || text
+          message = extractErrorMessage(body) ?? text
         } catch {
           message = text
         }
@@ -101,6 +129,10 @@ export async function apiFetch<T>(
     }
 
     if (res.status === 204) return undefined as T
+    const contentType = res.headers?.get('content-type') ?? ''
+    if (!/\bapplication\/(?:[\w.+-]*\+)?json\b/i.test(contentType)) {
+      throw new ApiError('API returned non-JSON response', res.status)
+    }
     const text = await res.text()
     if (!text) return undefined as T
     return JSON.parse(text) as T
@@ -243,235 +275,6 @@ export function ruleFromPayload(payload: AlertPayload): AlertRule | undefined {
 const TEST_PAYLOAD_NETWORKS: Network[] = ['mainnet', 'testnet', 'futurenet']
 const MAX_TEST_LABEL_LENGTH = 100
 
-/** JSON with object keys sorted, so equal payloads compare equal. */
-function canonicalJson(value: unknown): string {
-  return JSON.stringify(value, (_key, v) =>
-    v && typeof v === 'object' && !Array.isArray(v)
-      ? Object.fromEntries(
-          Object.entries(v as Record<string, unknown>).sort(([a], [b]) =>
-            a < b ? -1 : a > b ? 1 : 0
-          )
-        )
-      : v
-  )
-}
+/** JSON with object keys sorted, so
 
-/**
- * Parses a caller-supplied test payload body and returns it only if it is
- * exactly what buildTestWebhookPayload would produce for its own contract,
- * network, rule, label, timestamp and transaction hash. The proxy uses this
- * so it forwards dashboard-built test payloads verbatim (keeping the
- * browser's signature valid) without becoming a relay for arbitrary
- * content (#261). Returns null for anything else.
- */
-export function parseCanonicalTestPayload(body: string): AlertPayload | null {
-  let p: Record<string, unknown>
-  try {
-    p = JSON.parse(body)
-  } catch {
-    return null
-  }
-  if (typeof p !== 'object' || p === null || Array.isArray(p)) return null
-  if (p.is_test !== true) return null
-  if (typeof p.contract_id !== 'string' || !isValidContractId(p.contract_id))
-    return null
-  if (!TEST_PAYLOAD_NETWORKS.includes(p.network as Network)) return null
-  if (
-    typeof p.label !== 'string' ||
-    !p.label ||
-    p.label.length > MAX_TEST_LABEL_LENGTH
-  )
-    return null
-  if (typeof p.timestamp !== 'number' || !Number.isFinite(p.timestamp))
-    return null
-  if (
-    typeof p.transaction_hash !== 'string' ||
-    !/^[0-9a-f]{64}$/.test(p.transaction_hash)
-  )
-    return null
-  if (typeof p.rule_triggered !== 'string') return null
-
-  const payload = p as unknown as AlertPayload
-  const rule = ruleFromPayload(payload)
-  if (!rule) return null
-  const rebuilt = buildTestWebhookPayload({
-    contractId: payload.contract_id,
-    network: payload.network as Network,
-    rule,
-    label: payload.label,
-    timestamp: payload.timestamp,
-    transactionHash: payload.transaction_hash,
-  })
-  return canonicalJson(rebuilt) === canonicalJson(payload) ? payload : null
-}
-
-interface SendTestWebhookTransport {
-  /** Caller-owned signal, or a timeout in milliseconds (default 10000). */
-  signalOrTimeoutMs?: AbortSignal | number
-  /**
-   * Signing secret for the delivery. When provided (e.g. the stored
-   * `webhook_secret` of a watched contract), the request body is signed with
-   * HMAC-SHA256 (timestamped, `t=…,v1=…`) and sent in the `SIGNATURE_HEADER` header.
-   */
-  secret?: string
-}
-
-export type SendTestWebhookOptions = SendTestWebhookTransport &
-  /** Send a pre-built payload verbatim, e.g. the one shown in a preview. */
-  (
-    | { payload: AlertPayload }
-    | ({ payload?: undefined } & BuildTestWebhookPayloadOptions)
-  )
-
-export async function sendTestWebhook(
-  webhookUrl: string,
-  options: SendTestWebhookOptions
-): Promise<TestWebhookResult> {
-  const { signalOrTimeoutMs = 10000, secret } = options
-  const payload =
-    'payload' in options && options.payload
-      ? options.payload
-      : buildTestWebhookPayload(options)
-
-  const externalSignal =
-    typeof signalOrTimeoutMs === 'number' ? undefined : signalOrTimeoutMs
-  const timeoutMs =
-    typeof signalOrTimeoutMs === 'number' ? signalOrTimeoutMs : 10000
-
-  const internalController = new AbortController()
-  let timedOut = false
-
-  const timeoutId = setTimeout(() => {
-    timedOut = true
-    internalController.abort(new Error('timed out'))
-  }, timeoutMs)
-
-  const combinedController = new AbortController()
-
-  const onCallerAbort = () => {
-    clearTimeout(timeoutId)
-    if (!combinedController.signal.aborted) {
-      combinedController.abort(
-        externalSignal?.reason || new Error('cancelled by caller')
-      )
-    }
-  }
-
-  const onTimeoutAbort = () => {
-    if (!combinedController.signal.aborted) {
-      combinedController.abort(new Error('timed out'))
-    }
-  }
-
-  if (externalSignal?.aborted) {
-    clearTimeout(timeoutId)
-    combinedController.abort(
-      externalSignal.reason || new Error('cancelled by caller')
-    )
-  } else {
-    externalSignal?.addEventListener('abort', onCallerAbort, { once: true })
-    internalController.signal.addEventListener('abort', onTimeoutAbort, {
-      once: true,
-    })
-  }
-
-  const signal = combinedController.signal
-
-  try {
-    const body = JSON.stringify(payload)
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    }
-    if (secret)
-      headers[SIGNATURE_HEADER] = await signWebhookPayload(secret, body)
-
-    // In browser production, route through server proxy to avoid CORS failures (#23)
-    const isBrowser = typeof window !== 'undefined'
-    const useProxy = isBrowser && process.env.NODE_ENV !== 'test'
-
-    if (useProxy) {
-      // The body is signed here in the browser; only the signature crosses
-      // the network, never the secret, so it cannot end up in server logs,
-      // APM traces or error reports. The proxy forwards both verbatim.
-      const proxyRes = await fetch('/api/test-webhook', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: webhookUrl,
-          body,
-          ...(headers[SIGNATURE_HEADER]
-            ? { signature: headers[SIGNATURE_HEADER] }
-            : {}),
-        }),
-        signal,
-      })
-      // The proxy reports the receiver's status in its JSON; its own HTTP
-      // status is not the receiver's.
-      const data = (await proxyRes.json().catch(() => ({}))) as {
-        status?: number
-        ok?: boolean
-      // The proxy answers with the receiver's status, timing and body snippet
-      // as JSON; its own HTTP status is not the receiver's.
-      const data = (await proxyRes.json().catch(() => ({}))) as {
-        status?: number
-        ok?: boolean
-        durationMs?: number
-        bodySnippet?: string | null
-        error?: string
-      }
-      return {
-        status: typeof data.status === 'number' ? data.status : proxyRes.status,
-        ok: data.ok === true,
-      }
-        durationMs: data.durationMs,
-        bodySnippet: data.bodySnippet ?? null,
-        ...(data.error ? { error: data.error } : {}),
-      }
-    }
-
-    const startedAt = Date.now()
-    const res = await fetch(webhookUrl, {
-      method: 'POST',
-      headers,
-      body,
-      signal,
-    })
-    const durationMs = Date.now() - startedAt
-    let bodySnippet: string | null = null
-    try {
-      bodySnippet = sanitizeBodySnippet(
-        new Uint8Array(await res.arrayBuffer()),
-        res.headers.get('content-type')
-      )
-    } catch {
-      // The status is what matters; a body that can't be read is not an error.
-    }
-
-    const res = await fetch(webhookUrl, {
-      method: 'POST',
-      headers,
-      body,
-      signal,
-    })
-
-    // The status is reported back rather than thrown on, so callers can show
-    // the actual code; a non-2xx is still a failed delivery.
-    return { status: res.status, ok: res.ok, durationMs, bodySnippet }
-  } catch (error) {
-    if (timedOut || internalController.signal.aborted) {
-      throw new Error('Webhook request timed out')
-    }
-    if (externalSignal?.aborted) {
-      throw new Error('Webhook request cancelled by caller')
-    }
-    const err = error as { name?: string; message?: string }
-    if (err?.name === 'AbortError' || err?.message?.includes('aborted')) {
-      throw new Error('Webhook request timed out')
-    }
-    throw error
-  } finally {
-    clearTimeout(timeoutId)
-    externalSignal?.removeEventListener('abort', onCallerAbort)
-    internalController.signal.removeEventListener('abort', onTimeoutAbort)
-  }
-}
+/* … truncated 7597 chars — edit only what you need near the top … */
