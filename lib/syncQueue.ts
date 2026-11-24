@@ -20,6 +20,14 @@ function readQueue(): SyncQueueItem[] {
   }
 }
 
+/**
+ * Return the current pending sync queue. Used by the offline banner to show
+ * how many changes are waiting to sync.
+ */
+export function getSyncQueue(): SyncQueueItem[] {
+  return readQueue();
+}
+
 let timer: ReturnType<typeof setTimeout> | null = null;
 let started = false;
 let onDue: (() => void) | null = null;

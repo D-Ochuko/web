@@ -79,3 +79,101 @@ export function SyncRetryRunner() {
 
   return null;
 }
+
+export function OfflineBanner() {
+  const [online, setOnline] = useState(
+    typeof navigator === 'undefined' ? true : navigator.onLine
+  );
+  const [pendingCount, setPendingCount] = useState(0);
+  const [retrying, setRetrying] = useState(false);
+
+  useEffect(() => {
+    const refreshCount = () => {
+      const queue = getQueue();
+      setPendingCount(queue ? queue.length : 0);
+    };
+
+    const onOnline = () => {
+      setOnline(true);
+      refreshCount();
+    };
+    const onOffline = () => {
+      setOnline(false);
+      refreshCount();
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === QUEUE_STORAGE_KEY) {
+        refreshCount();
+      }
+    };
+
+    refreshCount();
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    window.addEventListener('storage', onStorage);
+
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
+
+  const handleRetryAll = async () => {
+    setRetrying(true);
+    try {
+      await runSyncRetries();
+    } finally {
+      const queue = getQueue();
+      setPendingCount(queue ? queue.length : 0);
+      setRetrying(false);
+    }
+  };
+
+  if (online && pendingCount === 0) return null;
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        position: 'sticky',
+        top: 0,
+        zIndex: 1000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: '0.75rem',
+        padding: '0.5rem 1rem',
+        background: online ? '#fef3c7' : '#fee2e2',
+        color: '#111827',
+        fontSize: '0.875rem',
+      }}
+    >
+      <span>
+        {online ? 'Back online' : 'You are offline'}
+        {pendingCount > 0
+          ? ` — ${pendingCount} change${pendingCount === 1 ? '' : 's'} waiting to sync`
+          : ''}
+      </span>
+      {pendingCount > 0 && (
+        <button
+          type="button"
+          onClick={handleRetryAll}
+          disabled={retrying}
+          style={{
+            padding: '0.25rem 0.75rem',
+            borderRadius: '0.375rem',
+            border: '1px solid #111827',
+            background: 'transparent',
+            color: '#111827',
+            cursor: retrying ? 'default' : 'pointer',
+            fontSize: '0.8125rem',
+          }}
+        >
+          {retrying ? 'Retrying…' : 'Retry all'}
+        </button>
+      )}
+    </div>
+  );
+}
