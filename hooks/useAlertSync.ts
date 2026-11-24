@@ -20,11 +20,16 @@ export interface AlertSyncState {
  *
  * Alerts are keyed by (contractId, network) so the same contract ID
  * registered on different networks does not mix alert history.
+ *
+ * When `contractEnabled` is false the poller is stopped entirely so a paused
+ * contract is not polled and does not fire notifications; it restarts when the
+ * contract is resumed.
  */
 export function useAlertSync(
   contractId: string | undefined,
   network: Network | string | undefined,
-  onNew?: (fresh: AlertPayload[]) => void
+  onNew?: (fresh: AlertPayload[]) => void,
+  contractEnabled: boolean = true
 ): AlertSyncState {
   const [state, setState] = useState<Omit<AlertSyncState, 'syncNow'>>({
     live: false,
@@ -36,7 +41,10 @@ export function useAlertSync(
   const syncNow = () => setPollTrigger(p => p + 1)
 
   useEffect(() => {
-    if (!contractId || !network || !isApiConfigured()) return
+    if (!contractId || !network || !isApiConfigured() || !contractEnabled) {
+      setState((s) => ({ ...s, enabled: false }))
+      return
+    }
     setState((s) => ({ ...s, enabled: true }))
     return startAlertPolling(contractId, network, {
       onSync: (fresh, at) => {
@@ -46,7 +54,7 @@ export function useAlertSync(
       onError: () => setState((s) => ({ ...s, live: false })),
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contractId, network, pollTrigger])
+  }, [contractId, network, pollTrigger, contractEnabled])
 
   return { ...state, syncNow }
 }
