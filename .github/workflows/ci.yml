@@ -48,6 +48,8 @@ jobs:
         run: npm audit --audit-level=high
         continue-on-error: true
 
+      # Runs the whole vitest suite (with coverage). A failing test fails this
+      # job, which is a required status check on `main`.
       - name: Test with coverage
         id: coverage
         run: npm run test:coverage
