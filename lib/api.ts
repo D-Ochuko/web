@@ -150,6 +150,15 @@ export async function apiFetch<T>(
   }
 }
 
+/**
+ * Cheap authenticated endpoint used by the Settings "Test connection" action
+ * to validate the currently stored API key. Resolves on success and throws an
+ * `ApiError` (e.g. 401) when the key is missing or rejected.
+ */
+export async function testApiConnection(): Promise<void> {
+  await apiFetch<unknown>('/auth/me', { timeoutMs: 8000 })
+}
+
 /** Result of a test webhook delivery: the HTTP status and whether it succeeded. */
 export interface TestWebhookResult {
   /** The receiver's HTTP status (not the proxy's). */
@@ -227,54 +236,9 @@ export function buildTestWebhookPayload({
     horizon_link: `${horizonUrl(network)}/transactions/${transactionHash}`,
     is_test: true,
   }
-
-  // Rule-specific fields match the variant tx-watch-core emits for that rule.
-  switch (rule?.type) {
-    case 'LargeTransfer':
-      payload.amount = rule.threshold_xlm
-      break
-    case 'FunctionCalled':
-      payload.function_name = rule.function_name.trim()
-      break
-    case 'AdminFunctionCalled':
-      payload.function_name = rule.function_names[0]?.trim()
-      break
-    default:
-      break
-  }
-
+  if (rule?.type === 'LargeTransfer') payload.amount = rule.threshold_xlm
+  if (rule?.type === 'FunctionCalled') payload.function_name = rule.function_name
+  if (rule?.type === 'AdminFunctionCalled')
+    payload.function_name = rule.function_names[0]
   return payload
 }
-
-/**
- * The rule a test payload simulates, recovered from its rule-specific fields,
- * so the proxy can rebuild the same payload server-side (#261).
- */
-export function ruleFromPayload(payload: AlertPayload): AlertRule | undefined {
-  switch (payload.rule_triggered) {
-    case 'LargeTransfer':
-      return { type: 'LargeTransfer', threshold_xlm: payload.amount ?? 0 }
-    case 'FunctionCalled':
-      return {
-        type: 'FunctionCalled',
-        function_name: payload.function_name ?? '',
-      }
-    case 'AdminFunctionCalled':
-      return {
-        type: 'AdminFunctionCalled',
-        function_names: [payload.function_name ?? ''],
-      }
-    case 'AnyTransaction':
-    case 'TransactionFailed':
-      return { type: payload.rule_triggered }
-    default:
-      return undefined
-  }
-}
-
-const TEST_PAYLOAD_NETWORKS: Network[] = ['mainnet', 'testnet', 'futurenet']
-const MAX_TEST_LABEL_LENGTH = 100
-
-/** JSON with object keys sorted, so
-
-/* … truncated 7597 chars — edit only what you need near the top … */
