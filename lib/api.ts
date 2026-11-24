@@ -226,19 +226,126 @@ export function buildTestWebhookPayload({
   timestamp = Date.now(),
   transactionHash = TEST_TX_HASH,
 }: BuildTestWebhookPayloadOptions): AlertPayload {
+  const triggered = rule?.type ?? 'AnyTransaction'
   const payload: AlertPayload = {
-    label,
     contract_id: contractId,
-    network,
-    rule_triggered: rule?.type ?? 'AnyTransaction',
     transaction_hash: transactionHash,
+    event_type: triggered,
+    rule_triggered: triggered,
     timestamp,
     horizon_link: `${horizonUrl(network)}/transactions/${transactionHash}`,
     is_test: true,
+    label,
   }
-  if (rule?.type === 'LargeTransfer') payload.amount = rule.threshold_xlm
-  if (rule?.type === 'FunctionCalled') payload.function_name = rule.function_name
-  if (rule?.type === 'AdminFunctionCalled')
-    payload.function_name = rule.function_names[0]
+  if (rule?.type === 'LargeTransfer') {
+    payload.amount = rule.threshold_xlm
+  } else if (rule?.type === 'FunctionCalled') {
+    payload.function_name = rule.function_name.trim()
+  } else if (rule?.type === 'AdminFunctionCalled') {
+    payload.function_name = rule.function_names[0]?.trim()
+  }
   return payload
+}
+
+/**
+ * Minimal shape of a queued sync retry. The runner only needs the scheduled
+ * attempt time to decide when to wake up; the actual retry execution is
+ * handled elsewhere.
+ */
+export interface SyncRetryEntry {
+  nextAttemptAt: number
+}
+
+/** localStorage key holding the pending sync-retry queue. */
+export const SYNC_RETRY_QUEUE_KEY = 'sync-retry-queue'
+
+/** Read the pending sync-retry queue from localStorage, tolerating bad data. */
+export function readSyncRetryQueue(): SyncRetryEntry[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(SYNC_RETRY_QUEUE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (entry): entry is SyncRetryEntry =>
+        entry != null && typeof entry.nextAttemptAt === 'number'
+    )
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Starts the sync-retry runner. Returns a cleanup function that stops the
+ * runner and removes all listeners/timers.
+ *
+ * Behaviour (issue #382):
+ * - No-op when the API is not configured.
+ * - Schedules a single timer for the earliest `nextAttemptAt` instead of
+ *   polling on a fixed interval.
+ * - Re-arms when the queue changes (storage events and a custom event).
+ * - Pauses while the tab is hidden and resumes when it becomes visible.
+ */
+export function startSyncRetries(
+  onRetry: (entry: SyncRetryEntry) => void = () => {}
+): () => void {
+  if (typeof window === 'undefined' || !isApiConfigured()) {
+    return () => {}
+  }
+
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let stopped = false
+
+  const clearTimer = () => {
+    if (timer !== null) {
+      clearTimeout(timer)
+      timer = null
+    }
+  }
+
+  const runDue = () => {
+    timer = null
+    if (stopped || document.hidden) return
+    const now = Date.now()
+    const queue = readSyncRetryQueue()
+    for (const entry of queue) {
+      if (entry.nextAttemptAt <= now) onRetry(entry)
+    }
+    arm()
+  }
+
+  const arm = () => {
+    clearTimer()
+    if (stopped || document.hidden) return
+    const queue = readSyncRetryQueue()
+    if (queue.length === 0) return
+    const earliest = queue.reduce(
+      (min, entry) => Math.min(min, entry.nextAttemptAt),
+      Number.POSITIVE_INFINITY
+    )
+    const delay = Math.max(0, earliest - Date.now())
+    timer = setTimeout(runDue, delay)
+  }
+
+  const onVisibilityChange = () => {
+    if (document.hidden) clearTimer()
+    else arm()
+  }
+
+  const onQueueChange = () => arm()
+
+  window.addEventListener('storage', onQueueChange)
+  window.addEventListener('sync-retry-queue-changed', onQueueChange)
+  document.addEventListener('visibilitychange', onVisibilityChange)
+
+  arm()
+
+  return () => {
+    stopped = true
+    clearTimer()
+    window.removeEventListener('storage', onQueueChange)
+    window.removeEventListener('sync-retry-queue-changed', onQueueChange)
+    document.removeEventListener('visibilitychange', onVisibilityChange)
+  }
 }
