@@ -28,10 +28,11 @@ const nextConfig = {
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
           ...hstsHeaders,
           // #118: CSP allows self, API, Horizon, Soroban RPC, and Freighter
-          {
+          // #473: CSP moved exclusively to middleware.ts for dynamic nonce enforcement
+          /* {
             key: 'Content-Security-Policy',
             value: `default-src ${cspAllowList}; script-src ${cspAllowList} 'nonce-REPLACE_WITH_NONCE'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ${cspAllowList} wss:; frame-src 'self' https://connect.freighter.app`,
-          },
+          }, */
           // #118: HSTS for production (add Preload with caution)
           {
             key: 'Strict-Transport-Security',
