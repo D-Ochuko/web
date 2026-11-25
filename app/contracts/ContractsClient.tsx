@@ -3,23 +3,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { WatchedContract, Network, AlertRuleType, isAlertRuleType } from '@/types'
+import {
+  WatchedContract,
+  Network,
+  AlertRuleType,
+  isAlertRuleType,
+} from '@/types'
 import { getContracts, getAlerts } from '@/lib/storage'
-import { 
-  refreshContracts, 
-  syncDeleteContract, 
-  syncSaveContract, 
-  getSyncStatuses, 
+import {
+  refreshContracts,
+  syncDeleteContract,
+  syncSaveContract,
+  getSyncStatuses,
   onSyncStatusesChange,
-  type SyncStatus 
+  type SyncStatus,
 } from '@/lib/contractSync'
-import { 
-  loadContractPrefs, 
-  saveContractPrefs, 
-  resolveContractPrefs, 
-  sortContracts, 
-  SortOption, 
-  ContractViewMode 
+import {
+  saveContractPrefs,
+  resolveContractPrefs,
+  sortContracts,
+  SortOption,
+  ContractViewMode,
 } from '@/lib/contractSort'
 import {
   applyContractFilter,
@@ -77,26 +81,33 @@ const VIEW_MODES: ContractViewMode[] = ['flat', 'grouped']
 export default function ContractsClient() {
   const searchParams = useSearchParams()
   const { showToast } = useToast()
-  
+
   const [allContracts, setAllContracts] = useState<WatchedContract[]>([])
-  const [syncStatuses, setSyncStatuses] = useState<Record<string, SyncStatus>>({})
-  const [networkFilter, setNetworkFilter] = useState<NetworkFilter>('all')
-  const [contractFilter, setContractFilter] = useState<ContractFilter | null>(() => {
-    return parseContractFilter(searchParams?.get('filter'))
-  })
+  const [syncStatuses, setSyncStatuses] = useState<Record<string, SyncStatus>>(
+    {}
+  )
+  const [contractFilter, setContractFilter] = useState<ContractFilter | null>(
+    () => {
+      return parseContractFilter(searchParams?.get('filter'))
+    }
+  )
   const [networkFilter, setNetworkFilter] = useState<NetworkFilter>(() => {
     const net = searchParams?.get('network')
-    return (net === 'mainnet' || net === 'testnet' || net === 'futurenet') ? net : 'all'
+    return net === 'mainnet' || net === 'testnet' || net === 'futurenet'
+      ? net
+      : 'all'
   })
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
     const s = searchParams?.get('status')
-    return (s === 'active' || s === 'paused') ? s : 'all'
+    return s === 'active' || s === 'paused' ? s : 'all'
   })
-  const [selectedRuleTypes, setSelectedRuleTypes] = useState<AlertRuleType[]>(() => {
-    const r = searchParams?.get('ruleTypes')
-    if (!r) return []
-    return r.split(',').filter(isAlertRuleType)
-  })
+  const [selectedRuleTypes, setSelectedRuleTypes] = useState<AlertRuleType[]>(
+    () => {
+      const r = searchParams?.get('ruleTypes')
+      if (!r) return []
+      return r.split(',').filter(isAlertRuleType)
+    }
+  )
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [bannerDismissed, setBannerDismissed] = useState(false)
@@ -134,7 +145,7 @@ export default function ContractsClient() {
     setAllContracts(all)
     setMounted(true)
     void doRefresh()
-    
+
     setSyncStatuses(getSyncStatuses())
     return onSyncStatusesChange(() => {
       setSyncStatuses(getSyncStatuses())
@@ -176,19 +187,11 @@ export default function ContractsClient() {
 
   useEffect(() => {
     setPage(1)
-  }, [networkFilter, search, contractFilter])
+  }, [networkFilter, statusFilter, selectedRuleTypes, search, contractFilter])
 
   const contractFiltered = useMemo(() => {
     return applyContractFilter(allContracts, contractFilter)
   }, [allContracts, contractFilter])
-
-  const networkFiltered = useMemo(() => {
-    if (networkFilter === 'all') {
-      return contractFiltered
-    }
-    return contractFiltered.filter((contract) => contract.network === networkFilter)
-  }, [contractFiltered, networkFilter])
-  }, [networkFilter, statusFilter, selectedRuleTypes, search])
 
   useEffect(() => {
     if (!mounted) return
@@ -196,7 +199,8 @@ export default function ContractsClient() {
     if (search.trim()) params.set('q', search.trim())
     if (networkFilter !== 'all') params.set('network', networkFilter)
     if (statusFilter !== 'all') params.set('status', statusFilter)
-    if (selectedRuleTypes.length > 0) params.set('ruleTypes', selectedRuleTypes.join(','))
+    if (selectedRuleTypes.length > 0)
+      params.set('ruleTypes', selectedRuleTypes.join(','))
     if (sortBy !== 'newest') params.set('sort', sortBy)
     if (viewMode !== 'flat') params.set('view', viewMode)
 
@@ -205,12 +209,20 @@ export default function ContractsClient() {
     if (typeof window !== 'undefined') {
       window.history.replaceState(null, '', newUrl)
     }
-  }, [networkFilter, statusFilter, selectedRuleTypes, search, sortBy, viewMode, mounted])
+  }, [
+    networkFilter,
+    statusFilter,
+    selectedRuleTypes,
+    search,
+    sortBy,
+    viewMode,
+    mounted,
+  ])
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase()
 
-    return allContracts.filter((contract) => {
+    return contractFiltered.filter((contract) => {
       if (networkFilter !== 'all' && contract.network !== networkFilter) {
         return false
       }
@@ -235,9 +247,12 @@ export default function ContractsClient() {
 
       return true
     })
-  }, [allContracts, networkFilter, statusFilter, selectedRuleTypes, search])
+  }, [contractFiltered, networkFilter, statusFilter, selectedRuleTypes, search])
 
-  const sorted = useMemo(() => sortContracts(filtered, sortBy), [filtered, sortBy])
+  const sorted = useMemo(
+    () => sortContracts(filtered, sortBy),
+    [filtered, sortBy]
+  )
   const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE))
   const paginated = useMemo(
     () => sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
@@ -286,11 +301,13 @@ export default function ContractsClient() {
   const selectedAlertCount = useMemo(() => {
     if (selectedIds.length === 0) return 0
     const alerts = getAlerts()
-    return alerts.filter((alert) => selectedIds.includes(alert.contract_id)).length
+    return alerts.filter((alert) => selectedIds.includes(alert.contract_id))
+      .length
   }, [selectedIds])
 
   const allPaginatedSelected =
-    paginated.length > 0 && paginated.every((contract) => selectedIds.includes(contract.id))
+    paginated.length > 0 &&
+    paginated.every((contract) => selectedIds.includes(contract.id))
 
   const toggleSelectionMode = () => {
     setSelectionMode((prev) => {
@@ -319,7 +336,7 @@ export default function ContractsClient() {
   }
 
   const selectAllFiltered = () => {
-    setSelectedIds(filtered.map(c => c.id))
+    setSelectedIds(filtered.map((c) => c.id))
   }
 
   const handleDeleteSelected = async () => {
@@ -330,21 +347,29 @@ export default function ContractsClient() {
     setSelectedIds([])
 
     // Optimistic local UI removal
-    setAllContracts((prev) => prev.filter((contract) => !idsToDelete.includes(contract.id)))
+    setAllContracts((prev) =>
+      prev.filter((contract) => !idsToDelete.includes(contract.id))
+    )
 
     const results = await Promise.allSettled(
-      idsToDelete.map(id => syncDeleteContract(id))
+      idsToDelete.map((id) => syncDeleteContract(id))
     )
 
     let failCount = 0
     results.forEach((res) => {
-      if (res.status === 'rejected' || (res.status === 'fulfilled' && !res.value.ok)) {
+      if (
+        res.status === 'rejected' ||
+        (res.status === 'fulfilled' && !res.value.ok)
+      ) {
         failCount++
       }
     })
 
     if (failCount > 0) {
-      showToast(`${failCount} of ${idsToDelete.length} could not be deleted on the server`, 'error')
+      showToast(
+        `${failCount} of ${idsToDelete.length} could not be deleted on the server`,
+        'error'
+      )
       // Restore failed deletions from truth
       refreshContracts().then((r) => setAllContracts(r.contracts))
     } else {
@@ -354,12 +379,16 @@ export default function ContractsClient() {
 
   const handlePauseSelected = () => {
     for (const id of selectedIds) {
-      const contract = allContracts.find(c => c.id === id)
+      const contract = allContracts.find((c) => c.id === id)
       if (contract) {
         syncSaveContract({ ...contract, enabled: false }, false)
       }
     }
-    setAllContracts((prev) => prev.map((c) => selectedIds.includes(c.id) ? { ...c, enabled: false } : c))
+    setAllContracts((prev) =>
+      prev.map((c) =>
+        selectedIds.includes(c.id) ? { ...c, enabled: false } : c
+      )
+    )
     setSelectedIds([])
     setSelectionMode(false)
   }
@@ -376,13 +405,18 @@ export default function ContractsClient() {
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-bold text-zinc-100">Contracts</h1>
             {refreshing && (
-              <span className="text-xs text-zinc-400 inline-flex items-center gap-1.5 ml-2" aria-live="polite">
+              <span
+                className="text-xs text-zinc-400 inline-flex items-center gap-1.5 ml-2"
+                aria-live="polite"
+              >
                 <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
                 Refreshing…
               </span>
             )}
           </div>
-          <p className="text-sm text-zinc-500 mt-1">{filtered.length} registered</p>
+          <p className="text-sm text-zinc-500 mt-1">
+            {filtered.length} registered
+          </p>
         </div>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -391,8 +425,18 @@ export default function ContractsClient() {
               Search contracts
             </label>
             <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-zinc-500">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35m0 0A7.5 7.5 0 103.5 10.5a7.5 7.5 0 0013.15 6.15z" />
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M21 21l-4.35-4.35m0 0A7.5 7.5 0 103.5 10.5a7.5 7.5 0 0013.15 6.15z"
+                />
               </svg>
             </span>
             <input
@@ -423,11 +467,22 @@ export default function ContractsClient() {
           className="flex items-center justify-between gap-3 px-4 py-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-200 text-sm"
         >
           <div className="flex items-center gap-2">
-            <svg className="w-4 h-4 flex-shrink-0 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            <svg
+              className="w-4 h-4 flex-shrink-0 text-amber-400"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+              />
             </svg>
             <span>
-              Showing cached contracts — couldn&apos;t reach the API ({refreshError})
+              Showing cached contracts — couldn&apos;t reach the API (
+              {refreshError})
             </span>
           </div>
           <div className="flex items-center gap-3 flex-shrink-0">
@@ -439,29 +494,24 @@ export default function ContractsClient() {
             >
               {refreshing ? 'Retrying…' : 'Retry'}
             </button>
-          ))}
-
-          {contractFilter && (
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-500/20 px-3 py-1.5 text-xs font-medium text-indigo-400 border border-indigo-500/30">
-              Filter: {CONTRACT_FILTER_LABELS[contractFilter] ?? contractFilter}
-              <button
-                type="button"
-                onClick={() => setContractFilter(null)}
-                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-indigo-500/30 hover:text-indigo-200"
-                aria-label="Remove filter"
-              >
-                ×
-              </button>
-            </span>
-          )}
             <button
               type="button"
               onClick={() => setBannerDismissed(true)}
               aria-label="Dismiss banner"
               className="text-amber-400 hover:text-amber-200 p-0.5"
             >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
               </svg>
             </button>
           </div>
@@ -471,7 +521,11 @@ export default function ContractsClient() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           {/* Network filter */}
-          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Network filter">
+          <div
+            className="flex flex-wrap items-center gap-1.5"
+            role="group"
+            aria-label="Network filter"
+          >
             {NETWORK_FILTERS.map((filter) => (
               <button
                 key={filter.value}
@@ -486,10 +540,29 @@ export default function ContractsClient() {
                 {filter.label}
               </button>
             ))}
+
+            {contractFilter && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-500/20 px-3 py-1.5 text-xs font-medium text-indigo-400 border border-indigo-500/30">
+                Filter:{' '}
+                {CONTRACT_FILTER_LABELS[contractFilter] ?? contractFilter}
+                <button
+                  type="button"
+                  onClick={() => setContractFilter(null)}
+                  className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-indigo-500/30 hover:text-indigo-200"
+                  aria-label="Remove filter"
+                >
+                  ×
+                </button>
+              </span>
+            )}
           </div>
 
           {/* Status filter toggle */}
-          <div className="flex items-center gap-1 p-1 bg-zinc-900 border border-zinc-800 rounded-lg text-xs" role="group" aria-label="Status filter">
+          <div
+            className="flex items-center gap-1 p-1 bg-zinc-900 border border-zinc-800 rounded-lg text-xs"
+            role="group"
+            aria-label="Status filter"
+          >
             {STATUS_FILTERS.map((s) => (
               <button
                 key={s.value}
@@ -505,6 +578,20 @@ export default function ContractsClient() {
               </button>
             ))}
           </div>
+
+          {contractFilter && (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-500/20 px-3 py-1.5 text-xs font-medium text-indigo-400 border border-indigo-500/30">
+              Filter: {CONTRACT_FILTER_LABELS[contractFilter] ?? contractFilter}
+              <button
+                type="button"
+                onClick={() => setContractFilter(null)}
+                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-indigo-500/30 hover:text-indigo-200"
+                aria-label="Remove filter"
+              >
+                ×
+              </button>
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -526,14 +613,28 @@ export default function ContractsClient() {
                 ))}
               </select>
               <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-zinc-500">
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M19 9l-7 7-7-7"
+                  />
                 </svg>
               </span>
             </div>
           )}
 
-          <div className="flex items-center gap-1 p-1 bg-zinc-900 border border-zinc-800 rounded-lg w-fit" role="group" aria-label="View mode">
+          <div
+            className="flex items-center gap-1 p-1 bg-zinc-900 border border-zinc-800 rounded-lg w-fit"
+            role="group"
+            aria-label="View mode"
+          >
             {VIEW_MODES.map((mode) => {
               const isActive = viewMode === mode
               return (
@@ -571,7 +672,11 @@ export default function ContractsClient() {
       </div>
 
       {/* Rule types multi-select filter */}
-      <div className="flex flex-wrap items-center gap-2 text-xs" role="group" aria-label="Rule types filter">
+      <div
+        className="flex flex-wrap items-center gap-2 text-xs"
+        role="group"
+        aria-label="Rule types filter"
+      >
         <span className="text-zinc-500 font-medium">Rules:</span>
         {RULE_TYPE_OPTIONS.map(({ type, label }) => {
           const isSelected = selectedRuleTypes.includes(type)
@@ -581,7 +686,9 @@ export default function ContractsClient() {
               type="button"
               onClick={() => {
                 setSelectedRuleTypes((prev) =>
-                  prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]
+                  prev.includes(type)
+                    ? prev.filter((t) => t !== type)
+                    : [...prev, type]
                 )
               }}
               className={`px-2.5 py-1 rounded-full border transition-colors ${
@@ -616,7 +723,9 @@ export default function ContractsClient() {
               >
                 {allPaginatedSelected ? 'Deselect page' : 'Select page'}
               </button>
-              <span className="text-sm text-zinc-400">{selectedIds.length} selected</span>
+              <span className="text-sm text-zinc-400">
+                {selectedIds.length} selected
+              </span>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -637,14 +746,22 @@ export default function ContractsClient() {
               </button>
             </div>
           </div>
-          {allPaginatedSelected && selectedIds.length < filtered.length && viewMode === 'flat' && (
-            <div className="text-sm text-zinc-300 bg-indigo-500/10 border border-indigo-500/20 px-3 py-2 rounded flex items-center justify-center">
-              <span>All {paginated.length} contracts on this page are selected.</span>
-              <button type="button" onClick={selectAllFiltered} className="ml-2 text-indigo-400 font-medium hover:underline">
-                Select all {filtered.length} matching contracts
-              </button>
-            </div>
-          )}
+          {allPaginatedSelected &&
+            selectedIds.length < filtered.length &&
+            viewMode === 'flat' && (
+              <div className="text-sm text-zinc-300 bg-indigo-500/10 border border-indigo-500/20 px-3 py-2 rounded flex items-center justify-center">
+                <span>
+                  All {paginated.length} contracts on this page are selected.
+                </span>
+                <button
+                  type="button"
+                  onClick={selectAllFiltered}
+                  className="ml-2 text-indigo-400 font-medium hover:underline"
+                >
+                  Select all {filtered.length} matching contracts
+                </button>
+              </div>
+            )}
         </div>
       )}
 
@@ -666,7 +783,10 @@ export default function ContractsClient() {
           title="No matching contracts"
           description="Try adjusting your search or filter."
           action={
-            (networkFilter !== 'all' || statusFilter !== 'all' || selectedRuleTypes.length > 0 || search) ? (
+            networkFilter !== 'all' ||
+            statusFilter !== 'all' ||
+            selectedRuleTypes.length > 0 ||
+            search ? (
               <button
                 type="button"
                 onClick={() => {
@@ -753,16 +873,22 @@ export default function ContractsClient() {
       {confirmOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-md rounded-xl border border-zinc-800 bg-zinc-900 p-6 space-y-4">
-            <h2 className="text-lg font-semibold text-zinc-100">Delete contracts</h2>
+            <h2 className="text-lg font-semibold text-zinc-100">
+              Delete contracts
+            </h2>
             <p className="text-sm text-zinc-400">
               Delete {selectedContracts.length} contract
-              {selectedContracts.length === 1 ? '' : 's'} and {selectedAlertCount} alert
+              {selectedContracts.length === 1 ? '' : 's'} and{' '}
+              {selectedAlertCount} alert
               {selectedAlertCount === 1 ? '' : 's'}? This cannot be undone.
             </p>
             <div className="max-h-32 overflow-y-auto bg-zinc-950 border border-zinc-800 rounded p-2">
               <ul className="text-xs text-zinc-400 list-disc pl-4 space-y-1">
-                {selectedContracts.map(c => (
-                  <li key={c.id}>{c.label} <span className="text-zinc-600">({c.network})</span></li>
+                {selectedContracts.map((c) => (
+                  <li key={c.id}>
+                    {c.label}{' '}
+                    <span className="text-zinc-600">({c.network})</span>
+                  </li>
                 ))}
               </ul>
             </div>

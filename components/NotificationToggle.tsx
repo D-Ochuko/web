@@ -46,6 +46,7 @@ export default function NotificationToggle() {
   if (!supported) return null
 
   async function toggle() {
+    if (denied) return
     if (on) {
       disableNotifications()
       setOn(false)
@@ -57,12 +58,22 @@ export default function NotificationToggle() {
   }
 
   return (
-    <label className="flex items-center gap-2 text-sm text-zinc-300">
-      <input type="checkbox" checked={on} onChange={toggle} />
-      Browser notifications for new alerts
+    <div className="flex flex-col gap-1 text-sm text-zinc-300">
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={toggle}
+          disabled={denied}
+        />
+        Browser notifications for new alerts
+      </label>
       {denied && (
-        <span className="text-xs text-red-400">Permission denied</span>
+        <p className="text-xs text-red-400">
+          Notifications are blocked. To re-enable them, open your browser
+          settings for this site and allow notifications, then reload the page.
+        </p>
       )}
-    </label>
+    </div>
   )
 }

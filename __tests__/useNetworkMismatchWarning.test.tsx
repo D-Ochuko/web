@@ -1,10 +1,18 @@
 import { vi } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
-import {
-  networkMismatchWarning,
-  useNetworkMismatchWarning,
-} from '@/lib/useNetworkMismatchWarning'
-import { FREIGHTER_NETWORK_BY_CHAIN, freighterNetworkForChain } from '@/lib/freighter'
+import { useNetworkMismatchWarning } from '@/lib/useNetworkMismatchWarning'
+import { networkMismatchWarning, mapFreighterNetwork } from '@/lib/freighter'
+import type { Network } from '@/types'
+
+const FREIGHTER_NETWORK_BY_CHAIN: Record<Network, string> = {
+  mainnet: 'PUBLIC',
+  testnet: 'TESTNET',
+  futurenet: 'FUTURENET',
+}
+
+function warningText(walletNetwork: string, chain: Network) {
+  return `Freighter is on ${walletNetwork} but this app is set to ${chain} (${FREIGHTER_NETWORK_BY_CHAIN[chain]}). Switch networks in the Freighter extension.`
+}
 
 const mockIsConnected = vi.fn()
 const mockGetAddress = vi.fn()
@@ -23,32 +31,28 @@ function mockWallet(network: string) {
 }
 
 describe('networkMismatchWarning', () => {
-  it('maps Freighter network names and warns on mismatch', () => {
+  it('returns null when the wallet matches and the canonical text otherwise', () => {
     expect(networkMismatchWarning('TESTNET', 'testnet')).toBeNull()
     expect(networkMismatchWarning('PUBLIC', 'mainnet')).toBeNull()
     expect(networkMismatchWarning('FUTURENET', 'futurenet')).toBeNull()
     expect(networkMismatchWarning('PUBLIC', 'testnet')).toBe(
-      'Your wallet is on PUBLIC, but this contract is on TESTNET'
+      warningText('PUBLIC', 'testnet')
     )
     expect(networkMismatchWarning('TESTNET', 'mainnet')).toBe(
-      'Your wallet is on TESTNET, but this contract is on MAINNET'
+      warningText('TESTNET', 'mainnet')
     )
   })
 
   it('covers every network in both directions', () => {
-    for (const [chain, freighterNetwork] of Object.entries(FREIGHTER_NETWORK_BY_CHAIN)) {
-      expect(freighterNetworkForChain(chain)).toBe(freighterNetwork)
-      expect(networkMismatchWarning(freighterNetwork, chain)).toBeNull()
-
-      for (const [otherChain, otherFreighterNetwork] of Object.entries(
-        FREIGHTER_NETWORK_BY_CHAIN
-      )) {
-        if (otherChain === chain) continue
-        expect(networkMismatchWarning(freighterNetwork, otherChain)).toBe(
-          `Your wallet is on ${freighterNetwork}, but this contract is on ${otherChain.toUpperCase()}`
-        )
-        expect(networkMismatchWarning(otherFreighterNetwork, chain)).toBe(
-          `Your wallet is on ${otherFreighterNetwork}, but this contract is on ${chain.toUpperCase()}`
+    const chains = Object.keys(FREIGHTER_NETWORK_BY_CHAIN) as Network[]
+    for (const chain of chains) {
+      const wallet = FREIGHTER_NETWORK_BY_CHAIN[chain]
+      expect(mapFreighterNetwork(wallet)).toBe(chain)
+      expect(networkMismatchWarning(wallet, chain)).toBeNull()
+      for (const other of chains) {
+        if (other === chain) continue
+        expect(networkMismatchWarning(wallet, other)).toBe(
+          warningText(wallet, other)
         )
       }
     }
@@ -63,11 +67,13 @@ describe('useNetworkMismatchWarning', () => {
   it('warns on the initial mount when the wallet network differs', async () => {
     mockWallet('PUBLIC')
 
-    const { result } = renderHook(() => useNetworkMismatchWarning('testnet', true))
+    const { result } = renderHook(() =>
+      useNetworkMismatchWarning('testnet', true)
+    )
 
     await waitFor(() =>
       expect(result.current.networkWarning).toBe(
-        'Your wallet is on PUBLIC, but this contract is on TESTNET'
+        warningText('PUBLIC', 'testnet')
       )
     )
   })
@@ -75,7 +81,9 @@ describe('useNetworkMismatchWarning', () => {
   it('stays quiet on mount when the networks match', async () => {
     mockWallet('TESTNET')
 
-    const { result } = renderHook(() => useNetworkMismatchWarning('testnet', true))
+    const { result } = renderHook(() =>
+      useNetworkMismatchWarning('testnet', true)
+    )
 
     await waitFor(() => expect(mockGetNetworkDetails).toHaveBeenCalled())
     expect(result.current.networkWarning).toBeNull()
@@ -96,7 +104,7 @@ describe('useNetworkMismatchWarning', () => {
 
     await waitFor(() =>
       expect(result.current.networkWarning).toBe(
-        'Your wallet is on TESTNET, but this contract is on MAINNET'
+        warningText('TESTNET', 'mainnet')
       )
     )
   })
@@ -105,7 +113,8 @@ describe('useNetworkMismatchWarning', () => {
     // No extension yet: the page renders the Connect button and has no wallet
     // network to compare against.
     const { result, rerender } = renderHook(
-      ({ connected }: { connected: boolean }) => useNetworkMismatchWarning('testnet', connected),
+      ({ connected }: { connected: boolean }) =>
+        useNetworkMismatchWarning('testnet', connected),
       { initialProps: { connected: false } }
     )
 
@@ -116,13 +125,15 @@ describe('useNetworkMismatchWarning', () => {
 
     await waitFor(() =>
       expect(result.current.networkWarning).toBe(
-        'Your wallet is on PUBLIC, but this contract is on TESTNET'
+        warningText('PUBLIC', 'testnet')
       )
     )
   })
 
   it('checks immediately when asked, e.g. from the connect handler', async () => {
-    const { result } = renderHook(() => useNetworkMismatchWarning('testnet', true))
+    const { result } = renderHook(() =>
+      useNetworkMismatchWarning('testnet', true)
+    )
     expect(result.current.networkWarning).toBeNull()
 
     mockWallet('PUBLIC')
@@ -130,7 +141,7 @@ describe('useNetworkMismatchWarning', () => {
 
     await waitFor(() =>
       expect(result.current.networkWarning).toBe(
-        'Your wallet is on PUBLIC, but this contract is on TESTNET'
+        warningText('PUBLIC', 'testnet')
       )
     )
   })
@@ -138,7 +149,9 @@ describe('useNetworkMismatchWarning', () => {
   it('clears the warning when the wallet disconnects', async () => {
     mockWallet('PUBLIC')
 
-    const { result } = renderHook(() => useNetworkMismatchWarning('testnet', true))
+    const { result } = renderHook(() =>
+      useNetworkMismatchWarning('testnet', true)
+    )
     await waitFor(() => expect(result.current.networkWarning).not.toBeNull())
 
     result.current.clearNetworkWarning()

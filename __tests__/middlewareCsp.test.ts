@@ -14,6 +14,14 @@ function connectSrc(): string {
   )
 }
 
+function directive(name: string): string {
+  const res = middleware(new NextRequest('https://dashboard.example/contracts'))
+  const policy = res.headers.get('Content-Security-Policy') ?? ''
+  return (
+    policy.split(';').find((entry) => entry.trim().startsWith(`${name} `)) ?? ''
+  )
+}
+
 describe('middleware Content-Security-Policy', () => {
   afterEach(() => vi.unstubAllEnvs())
 
@@ -32,10 +40,20 @@ describe('middleware Content-Security-Policy', () => {
       'NEXT_PUBLIC_SOROBAN_RPC_URL_MAINNET',
       'https://mainnet.stellar.validationcloud.io/v1/KEY/soroban/rpc'
     )
-    vi.stubEnv('NEXT_PUBLIC_SOROBAN_RPC_URL_TESTNET', 'http://localhost:8000/rpc')
+    vi.stubEnv(
+      'NEXT_PUBLIC_SOROBAN_RPC_URL_TESTNET',
+      'http://localhost:8000/rpc'
+    )
     const directive = connectSrc()
     expect(directive).toContain('https://mainnet.stellar.validationcloud.io')
     expect(directive).toContain('http://localhost:8000')
     expect(directive).not.toContain('https://localhost')
+  })
+
+  it('locks down base-uri, object-src, form-action and frame-ancestors', () => {
+    expect(directive('base-uri').trim()).toBe("base-uri 'self'")
+    expect(directive('object-src').trim()).toBe("object-src 'none'")
+    expect(directive('form-action').trim()).toBe("form-action 'self'")
+    expect(directive('frame-ancestors').trim()).toBe("frame-ancestors 'none'")
   })
 })
