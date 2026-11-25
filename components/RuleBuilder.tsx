@@ -107,7 +107,8 @@ export default function RuleBuilder({
   const thresholdHintId = `${idPrefix}-threshold-hint`
   const errorId = `${idPrefix}-error`
   const warningId = `${idPrefix}-warning`
-  const thresholdDescribedBy = [error ? errorId : null, thresholdHintId].filter(Boolean).join(' ')
+  const hasThresholdHint = !isNaN(parseFloat(thresholdText))
+  const thresholdDescribedBy = [error ? errorId : null, hasThresholdHint ? thresholdHintId : null].filter(Boolean).join(' ')
   const functionNameDescribedBy = error ? errorId : undefined
   const functionNamesDescribedBy = error ? errorId : undefined
   const typeDescribedBy = [error ? errorId : null, typeHintId].filter(Boolean).join(' ')
@@ -388,7 +389,7 @@ export default function RuleBuilder({
               }}
               className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-indigo-500"
             />
-            {!isNaN(thresholdPreview) && (
+            {hasThresholdHint && (
               <p id={thresholdHintId} className="text-xs text-zinc-500 mt-1">
                 Threshold: {formatXlm(thresholdPreview)} XLM
               </p>
