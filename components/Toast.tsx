@@ -90,7 +90,9 @@ export default function Toast({
   return (
     <div
       role="status"
-      aria-live="polite"
+      // Errors interrupt so a failed save is heard immediately; successes wait
+      // for a pause in speech (#538).
+      aria-live={type === 'error' ? 'assertive' : 'polite'}
       aria-atomic="true"
       onMouseEnter={pauseTimer}
       onMouseLeave={() => setIsPaused(false)}

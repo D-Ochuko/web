@@ -1,5 +1,5 @@
 import React from 'react'
-import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import { vi, beforeEach, afterEach } from 'vitest'
 import CopyButton from '../components/CopyButton'
 
@@ -15,12 +15,16 @@ describe('CopyButton', () => {
 
   it('renders a button with default aria-label', () => {
     render(<CopyButton text="hello" />)
-    expect(screen.getByRole('button', { name: 'Copy to clipboard' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Copy to clipboard' })
+    ).toBeInTheDocument()
   })
 
   it('renders a button with custom aria-label', () => {
     render(<CopyButton text="hello" aria-label="Copy contract ID" />)
-    expect(screen.getByRole('button', { name: 'Copy contract ID' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Copy contract ID' })
+    ).toBeInTheDocument()
   })
 
   it('has type="button" to prevent accidental form submission', () => {
@@ -127,5 +131,23 @@ describe('CopyButton', () => {
     act(() => {
       vi.advanceTimersByTime(2000)
     })
+  })
+})
+
+describe('CopyButton disabled', () => {
+  it('is disabled and never copies while disabled', () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    })
+
+    render(<CopyButton text="whsec_empty" disabled />)
+    const btn = screen.getByRole('button', { name: 'Copy to clipboard' })
+    expect(btn).toBeDisabled()
+
+    fireEvent.click(btn)
+    expect(writeText).not.toHaveBeenCalled()
+    expect(screen.getByRole('status')).toHaveTextContent('')
   })
 })

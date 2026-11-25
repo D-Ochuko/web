@@ -49,6 +49,19 @@ export const LAST_CREATED_CONTRACT_KEY = 'txwatch_last_created_contract'
 export const DUPLICATE_CONTRACT_KEY = 'txwatch_duplicate_contract'
 
 /**
+ * Previous webhook signing secret, kept during the rotation grace period so
+ * deliveries can be signed with both the old and new secrets.
+ */
+export const WEBHOOK_SECRET_PREVIOUS_KEY = 'txwatch_webhook_secret_previous'
+
+/**
+ * Expiry (epoch milliseconds) of the previous webhook signing secret. Once
+ * this time has passed, the previous secret is no longer used for signing.
+ */
+export const WEBHOOK_SECRET_PREVIOUS_EXPIRES_AT_KEY =
+  'txwatch_webhook_secret_previous_expires_at'
+
+/**
  * Frozen list of every storage key managed by the application.
  *
  * Use this for backup/export and "reset app data" flows so that new keys are
@@ -66,6 +79,8 @@ export const TXWATCH_KEYS = Object.freeze([
   STORAGE_VERSION_KEY,
   LAST_CREATED_CONTRACT_KEY,
   DUPLICATE_CONTRACT_KEY,
+  WEBHOOK_SECRET_PREVIOUS_KEY,
+  WEBHOOK_SECRET_PREVIOUS_EXPIRES_AT_KEY,
 ] as const)
 
 /**

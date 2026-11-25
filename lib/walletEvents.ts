@@ -24,8 +24,10 @@ export const WALLET_EVENT = 'txwatch:wallet'
 export const WALLET_STORAGE_KEY = FREIGHTER_PUBLIC_KEY
 export const WALLET_CHANNEL_NAME = 'txwatch-wallet'
 
-interface WalletChangeDetail {
+export interface WalletChangeDetail {
   publicKey: string | null
+  network?: string | null
+  networkPassphrase?: string | null
 }
 
 /**
@@ -34,6 +36,14 @@ interface WalletChangeDetail {
  * degrades to same-tab CustomEvents only.
  */
 let walletChannel: BroadcastChannel | null = null
+let lastKnownPublicKey: string | null | undefined
+
+/**
+ * Number of live subscribers sharing `walletChannel`. The channel is only
+ * closed once this drops to zero, so one component unmounting does not tear
+ * the port out from under the others.
+ */
+let walletChannelSubscribers = 0
 
 function getWalletChannel(): BroadcastChannel | null {
   if (typeof BroadcastChannel === 'undefined') return null
@@ -63,12 +73,26 @@ function clearPersistedPublicKey(): void {
 /**
  * Publish the current wallet state to every other wallet-aware component.
  *
- * Passing `null` broadcasts a cleared state, so no consumer is left holding a
- * key that no longer has a live connection behind it. The event is always
- * dispatched, even if storage access throws.
+ * Passing `null` (or an object with a `null` key) broadcasts a cleared state,
+ * so no consumer is left holding a key that no longer has a live connection
+ * behind it. The network and its passphrase travel with the key so a switch in
+ * the extension reaches the header pill and the mismatch warnings without a
+ * reload. The event is always dispatched, even if storage access throws.
  */
-export function broadcastWalletChange(publicKey: string | null): void {
+export function broadcastWalletChange(
+  detail: WalletChangeDetail | string | null
+): void {
   if (typeof window === 'undefined') return
+
+  const payload: WalletChangeDetail =
+    typeof detail === 'string' || detail === null
+      ? { publicKey: detail }
+      : {
+          publicKey: detail.publicKey ?? null,
+          network: detail.network ?? null,
+          networkPassphrase: detail.networkPassphrase ?? null,
+        }
+  lastKnownPublicKey = publicKey
 
   // Never persist the key; just make sure no stale copy survives.
   clearPersistedPublicKey()
@@ -79,17 +103,30 @@ export function broadcastWalletChange(publicKey: string | null): void {
   }
 
   window.dispatchEvent(
-    new CustomEvent<WalletChangeDetail>(WALLET_EVENT, { detail: { publicKey } })
+    new CustomEvent<WalletChangeDetail>(WALLET_EVENT, { detail: payload })
   )
 
   const channel = getWalletChannel()
   if (channel) {
     try {
-      channel.postMessage({ publicKey } satisfies WalletChangeDetail)
+      channel.postMessage(payload)
     } catch {
       // Channel closed or serialization failed; same-tab listeners still ran.
     }
   }
+}
+
+/**
+ * Broadcast only when the observed wallet key has changed. Initial probes
+ * across multiple consumers can all resolve with the same key.
+ */
+export function broadcastWalletChangeIfChanged(publicKey: string | null): void {
+  if (lastKnownPublicKey === undefined) {
+    lastKnownPublicKey = publicKey
+    return
+  }
+  if (lastKnownPublicKey === publicKey) return
+  broadcastWalletChange(publicKey)
 }
 
 // Remove any value persisted by older builds as soon as this module loads.
@@ -102,16 +139,23 @@ if (typeof window !== 'undefined') {
  * returned straight from a `useEffect`.
  *
  * Listens to the same-tab CustomEvent and, when available, to the cross-tab
- * `BroadcastChannel`. The channel is closed on unsubscribe so a torn-down
- * subscriber does not keep the port (and its message queue) alive.
+ * `BroadcastChannel`. The shared channel is reference-counted: it is closed
+ * only when the last subscriber unsubscribes, so a torn-down component does
+ * not cut off the remaining listeners.
  */
 export function subscribeWallet(
-  listener: (publicKey: string | null) => void
+  listener: (detail: WalletChangeDetail) => void
 ): () => void {
   if (typeof window === 'undefined') return () => {}
 
   const handler = (event: Event) => {
     const detail = (event as CustomEvent<WalletChangeDetail>).detail
+    listener({
+      publicKey: detail ? detail.publicKey ?? null : null,
+      network: detail ? detail.network ?? null : null,
+      networkPassphrase: detail ? detail.networkPassphrase ?? null : null,
+    })
+    lastKnownPublicKey = detail ? detail.publicKey : null
     listener(detail ? detail.publicKey : null)
   }
 
@@ -120,23 +164,38 @@ export function subscribeWallet(
   const channel = getWalletChannel()
   const channelHandler = (event: MessageEvent<WalletChangeDetail>) => {
     const detail = event.data
-    listener(detail ? detail.publicKey ?? null : null)
+    listener({
+      publicKey: detail ? detail.publicKey ?? null : null,
+      network: detail ? detail.network ?? null : null,
+      networkPassphrase: detail ? detail.networkPassphrase ?? null : null,
+    })
+    lastKnownPublicKey = detail ? (detail.publicKey ?? null) : null
+    listener(detail ? (detail.publicKey ?? null) : null)
   }
 
   if (channel) {
     channel.addEventListener('message', channelHandler)
+    walletChannelSubscribers += 1
   }
 
+  let unsubscribed = false
+
   return () => {
+    if (unsubscribed) return
+    unsubscribed = true
+
     window.removeEventListener(WALLET_EVENT, handler)
     if (channel) {
       channel.removeEventListener('message', channelHandler)
-      try {
-        channel.close()
-      } catch {
-        // Already closed.
+      walletChannelSubscribers = Math.max(0, walletChannelSubscribers - 1)
+      if (walletChannelSubscribers === 0) {
+        try {
+          channel.close()
+        } catch {
+          // Already closed.
+        }
+        if (walletChannel === channel) walletChannel = null
       }
-      if (walletChannel === channel) walletChannel = null
     }
   }
 }

@@ -1,0 +1,6 @@
+{
+  "401": { "message": "Missing or invalid API key" },
+  "404": { "error": "Contract not found" },
+  "429": { "message": "Too many requests" },
+  "503": { "message": "Service temporarily unavailable" }
+}

@@ -22,3 +22,19 @@ Do not include live webhook URLs, Slack/Discord tokens, signing secrets, access 
 Maintainers will aim to acknowledge a report within 5 business days and provide an initial assessment within 10 business days. We will keep the reporter updated about remediation progress, coordinate a reasonable disclosure date, and notify them when a fix or mitigation is available. These are response goals, not a guaranteed service level; complexity or maintainer availability may affect timelines.
 
 Please allow maintainers a reasonable opportunity to investigate and release a fix before any public disclosure. We will credit reporters in an advisory when they agree and when doing so does not create additional risk.
+
+## Known limitations
+
+The following are known, accepted limitations of the current implementation. They are documented here so that operators and future contributors can reason about them; they are not considered vulnerabilities in the current read-only monitoring use case.
+
+### Wallet connection is not signature-verified
+
+Connecting a wallet (for example via Freighter) only reads the public key reported by the wallet extension. The app does not issue a challenge for the user to sign, so a "connected" wallet is not cryptographic proof of ownership of that account.
+
+This is acceptable today because the app is a read-only monitoring tool: it holds no funds, and wallet identity does not grant any permissions or privileged actions. If a future feature ties permissions to wallet identity (for example, controlling who may edit a contract's rules), it must introduce a signed-challenge authentication flow before relying on the wallet address for authorization.
+
+### Webhook URL validation is client-side only
+
+`isValidUrl` in `lib/stellar.ts` only checks that a webhook URL uses the `http` or `https` protocol. It does not reject `localhost`, private IP ranges, link-local addresses (such as `169.254.169.254`), or other internal hosts.
+
+Any server-side component that fetches user-supplied webhook URLs must implement its own SSRF protections (for example, resolving and validating the destination host, blocking private/link-local ranges, and restricting redirects). Do not rely on the client-side check as a security boundary.

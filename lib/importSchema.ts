@@ -1,11 +1,15 @@
 import type { AlertRule, Network, WatchedContract } from '@/types'
-import { isAlertRuleType, parseAlertRule } from '@/types'
+import { isAlertRuleType, isWebhookFormat, parseAlertRule } from '@/types'
+import { parseWebhookHeaders } from '@/lib/webhookHeaders'
 import {
   isValidContractId,
   validateWebhookUrl,
   type WebhookUrlErrorCode,
 } from '@/lib/stellar'
 import { sanitizeAdminFunctionNames } from '@/lib/soroban'
+import { generateId } from '@/lib/id'
+import { validateThresholdNumber } from '@/lib/formatAmount'
+import { validateAlertPayload } from '@/lib/alertSource'
 
 /** Export file format, aligned with WatchedContract (uses contract_id, not address). */
 export interface ContractsSnapshot {
@@ -60,8 +64,13 @@ export interface ImportParseResult {
   contracts: WatchedContract[]
   errors: ImportEntryError[]
   alerts?: AlertHistoryEntry[]
+  /** Number of restored alerts dropped because they failed validation. */
+  skippedAlerts?: number
   settings?: BackupSettings
 }
+
+/** Maximum contract label length, shared by the forms and import/API validation. */
+export const MAX_LABEL_LENGTH = 100
 
 const NETWORKS: Network[] = ['mainnet', 'testnet', 'futurenet']
 
@@ -78,12 +87,31 @@ function normalizeFunctionNames(names: string[]): string[] | string {
   return valid
 }
 
-export function buildSnapshot(contracts: WatchedContract[]): ContractsSnapshot {
+export interface BuildSnapshotOptions {
+  /** When true, webhook signing secrets are included in the export. */
+  includeSecrets?: boolean
+}
+
+/**
+ * Builds a contracts-only export snapshot. Webhook signing secrets are
+ * stripped unless `includeSecrets` is explicitly enabled, matching the CSV
+ * export behaviour of never leaking secrets by default.
+ */
+export function buildSnapshot(
+  contracts: WatchedContract[],
+  options: BuildSnapshotOptions = {}
+): ContractsSnapshot {
+  const includeSecrets = options.includeSecrets === true
+  const serialized = contracts.map((contract) => {
+    if (includeSecrets) return contract
+    const { webhook_secret: _secret, ...rest } = contract
+    return rest
+  })
   return {
     version: 1,
     exportedAt: new Date().toISOString(),
-    count: contracts.length,
-    contracts,
+    count: serialized.length,
+    contracts: serialized,
   }
 }
 
@@ -138,21 +166,30 @@ export function buildBackup(
   }
 }
 
-/** Light shape check for alert-history entries; returns null when unusable. */
+/**
+ * Validates a restored alert with the same rules as core alerts and keeps only
+ * known fields; returns null when unusable.
+ */
 function validateAlertEntry(entry: unknown): AlertHistoryEntry | null {
-  if (typeof entry !== 'object' || entry === null) return null
-  const e = entry as Record<string, unknown>
-  if (typeof e.contract_id !== 'string' || !e.contract_id) return null
-  if (typeof e.timestamp !== 'number' || !Number.isFinite(e.timestamp))
-    return null
+  const payload = validateAlertPayload(entry)
+  if (typeof payload === 'string') return null
+  if (!NETWORKS.includes(payload.network as Network)) return null
+  const id = (entry as { id?: unknown }).id
   const result: AlertHistoryEntry = {
-    ...e,
-    contract_id: e.contract_id,
-    timestamp: e.timestamp,
+    label: payload.label,
+    contract_id: payload.contract_id,
+    network: payload.network as Network,
+    rule_triggered: payload.rule_triggered,
+    transaction_hash: payload.transaction_hash,
+    timestamp: payload.timestamp,
+    horizon_link: payload.horizon_link,
   }
-  if (typeof e.id === 'string' && e.id) result.id = e.id
-  if (NETWORKS.includes(e.network as Network))
-    result.network = e.network as Network
+  if (!result.contract_id) return null
+  if (typeof id === 'string' && id) result.id = id
+  if (payload.function_name !== undefined)
+    result.function_name = payload.function_name
+  if (payload.amount !== undefined) result.amount = payload.amount
+  if (payload.is_test !== undefined) result.is_test = payload.is_test
   return result
 }
 
@@ -162,8 +199,11 @@ function validateRule(rule: unknown): AlertRule | string {
   if (!isAlertRuleType(type)) return `unknown rule type "${String(type)}"`
   const parsed = parseAlertRule(rule)
   if (!parsed) {
-    if (type === 'LargeTransfer')
-      return 'threshold_xlm must be a non-negative number'
+    if (type === 'LargeTransfer') {
+      const threshold = (rule as { threshold_xlm?: unknown }).threshold_xlm
+      if (typeof threshold !== 'number') return 'threshold_xlm must be a number'
+      return `invalid threshold_xlm: ${validateThresholdNumber(threshold) ?? 'must be a valid number'}`
+    }
     if (type === 'AdminFunctionCalled')
       return 'function_names must be an array of strings'
     return 'function_name must be a non-empty string'
@@ -183,8 +223,10 @@ const WEBHOOK_URL_IMPORT_ERRORS: Record<
 > = {
   invalid_url: 'invalid webhook_url: must be a valid URL',
   credentials_in_url: 'invalid webhook_url: must not contain credentials',
-  http_on_mainnet: 'invalid webhook_url: http is not allowed on mainnet; use https',
-  loopback_not_allowed: 'invalid webhook_url: loopback addresses are not allowed',
+  http_on_mainnet:
+    'invalid webhook_url: http is not allowed on mainnet; use https',
+  loopback_not_allowed:
+    'invalid webhook_url: loopback addresses are not allowed',
   private_ip_not_allowed:
     'invalid webhook_url: private network addresses are not allowed',
   link_local_not_allowed:
@@ -201,13 +243,21 @@ export function validateContractEntry(
   if (typeof e.contract_id !== 'string' || !isValidContractId(e.contract_id))
     return 'invalid contract_id'
   if (!NETWORKS.includes(e.network as Network)) return 'invalid network'
-  if (typeof e.webhook_url !== 'string') return 'invalid webhook_url: must be a string'
+  if (typeof e.webhook_url !== 'string')
+    return 'invalid webhook_url: must be a string'
   const urlResult = validateWebhookUrl(e.webhook_url, e.network as Network)
   if (!urlResult.valid && urlResult.code && urlResult.code !== 'http_warning') {
     return WEBHOOK_URL_IMPORT_ERRORS[urlResult.code]
   }
   if (e.webhook_secret !== undefined && typeof e.webhook_secret !== 'string') {
     return 'webhook_secret must be a string'
+  }
+  if (e.webhook_format !== undefined && !isWebhookFormat(e.webhook_format)) {
+    return 'invalid webhook_format: must be json, slack or discord'
+  }
+  const webhookHeaders = parseWebhookHeaders(e.webhook_headers)
+  if (webhookHeaders === null) {
+    return 'invalid webhook_headers: must be a map of up to 5 valid header names to values'
   }
   if (!Array.isArray(e.rules)) return 'rules must be an array'
   const rules: AlertRule[] = []
@@ -216,12 +266,13 @@ export function validateContractEntry(
     if (typeof result === 'string') return result
     rules.push(result)
   }
+  const trimmedLabel = typeof e.label === 'string' ? e.label.trim() : ''
+  if (trimmedLabel.length > MAX_LABEL_LENGTH)
+    return `label must be ${MAX_LABEL_LENGTH} characters or less`
   const now = Date.now()
   const contract: WatchedContract = {
-    id:
-      typeof e.id === 'string' && e.id ? e.id : `${e.contract_id}:${e.network}`,
-    label:
-      typeof e.label === 'string' && e.label.trim() ? e.label : e.contract_id,
+    id: typeof e.id === 'string' && e.id ? e.id : generateId(),
+    label: trimmedLabel || e.contract_id,
     contract_id: e.contract_id,
     network: e.network as Network,
     rules,
@@ -232,6 +283,12 @@ export function validateContractEntry(
   if (typeof e.enabled === 'boolean') contract.enabled = e.enabled
   if (typeof e.webhook_secret === 'string' && e.webhook_secret.trim()) {
     contract.webhook_secret = e.webhook_secret.trim()
+  }
+  if (Object.keys(webhookHeaders).length > 0) {
+    contract.webhook_headers = webhookHeaders
+  }
+  if (isWebhookFormat(e.webhook_format) && e.webhook_format !== 'json') {
+    contract.webhook_format = e.webhook_format
   }
   return contract
 }
@@ -261,25 +318,41 @@ export function parseImport(json: string): ImportParseResult {
   }
   const contracts: WatchedContract[] = []
   const errors: ImportEntryError[] = []
+  const seen = new Map<string, number>()
   list.forEach((entry, index) => {
     const result = validateContractEntry(entry)
-    if (typeof result === 'string') errors.push({ index, message: result })
-    else contracts.push(result)
+    if (typeof result === 'string') {
+      errors.push({ index, message: result })
+      return
+    }
+    const key = `${result.network}:${result.contract_id}`
+    const first = seen.get(key)
+    if (first !== undefined) {
+      errors.push({
+        index,
+        message: `duplicate of entry ${first} (same contract_id and network)`,
+      })
+      return
+    }
+    seen.set(key, index)
+    contracts.push(result)
   })
   if (version !== 2) return { contracts, errors }
 
   const rawAlerts = (envelope as { alerts?: unknown }).alerts
   const alerts: AlertHistoryEntry[] = []
+  let skippedAlerts = 0
   if (Array.isArray(rawAlerts)) {
     for (const entry of rawAlerts) {
       const result = validateAlertEntry(entry)
       if (result) alerts.push(result)
+      else skippedAlerts++
     }
   }
   const settings = normalizeSettings(
     (envelope as { settings?: unknown }).settings
   )
-  return { contracts, errors, alerts, settings }
+  return { contracts, errors, alerts, skippedAlerts, settings }
 }
 
 export type ImportMode = 'merge' | 'replace'

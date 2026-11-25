@@ -139,8 +139,7 @@ export const MAX_XLM_DECIMALS = 7
 export const MAX_XLM_THRESHOLD = 50_000_000_000
 
 export type ThresholdValidation =
-  | { ok: true; value: number }
-  | { ok: false; error: string }
+  { ok: true; value: number } | { ok: false; error: string }
 
 const PLAIN_DECIMAL = /^(?:\d+(?:\.\d*)?|\.\d+)$/
 
@@ -184,4 +183,21 @@ export function validateThreshold(raw: string): ThresholdValidation {
     }
   }
   return { ok: true, value: Number(text) }
+}
+
+/**
+ * Validates an already-parsed numeric XLM threshold (e.g. from an import file,
+ * storage or the API) against the same bounds as `validateThreshold`.
+ * Returns an error message, or null when the value is acceptable.
+ */
+export function validateThresholdNumber(value: number): string | null {
+  if (!Number.isFinite(value)) return 'Enter a valid XLM threshold'
+  if (value <= 0) return 'Threshold must be greater than 0'
+  if (value > MAX_XLM_THRESHOLD) {
+    return `Threshold cannot exceed ${MAX_XLM_THRESHOLD.toLocaleString('en-US')} XLM`
+  }
+  if (Number(value.toFixed(MAX_XLM_DECIMALS)) !== value) {
+    return `Threshold supports at most ${MAX_XLM_DECIMALS} decimal places`
+  }
+  return null
 }

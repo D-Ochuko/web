@@ -1,11 +1,9 @@
 import { apiFetch, isApiConfigured } from '@/lib/api'
 import { getAlerts } from '@/lib/storage'
 import { validateContractEntry } from '@/lib/importSchema'
-import {
-  isValidFunctionName,
-  sanitizeAdminFunctionNames,
-} from '@/lib/soroban'
+import { isValidFunctionName, sanitizeAdminFunctionNames } from '@/lib/soroban'
 import type { WatchedContract } from '@/types'
+import type { WatchedContract as ContractDto } from '@/lib/api-types'
 
 /**
  * ASSUMED tx-watch-core REST routes (not verified against the core repo):
@@ -18,10 +16,7 @@ import type { WatchedContract } from '@/types'
 
 // Function-name validation lives in lib/soroban.ts; re-exported here so
 // existing imports from '@/lib/contractsApi' keep working.
-export {
-  isValidFunctionName,
-  sanitizeAdminFunctionNames,
-}
+export { isValidFunctionName, sanitizeAdminFunctionNames }
 
 /**
  * Filter params supported by the contracts page. The dashboard stat tiles
@@ -87,8 +82,11 @@ export function hasAlertSinceLocalMidnight(
  * Whether a contract has an active webhook configured (enabled and has a webhook URL).
  */
 export function hasActiveWebhooks(contract: WatchedContract): boolean {
-  const isEnabled = contract.enabled !== false && !(contract as { paused?: boolean }).paused
-  const hasUrl = Boolean(contract.webhook_url && contract.webhook_url.trim().length > 0)
+  const isEnabled =
+    contract.enabled !== false && !(contract as { paused?: boolean }).paused
+  const hasUrl = Boolean(
+    contract.webhook_url && contract.webhook_url.trim().length > 0
+  )
   return isEnabled && hasUrl
 }
 
@@ -146,25 +144,35 @@ function serializeContract(contract: WatchedContract): string {
   return JSON.stringify(payload)
 }
 
+/**
+ * Narrow a core response typed by the generated OpenAPI schema to the client's
+ * `WatchedContract`. The shapes match by construction (the spec mirrors
+ * `types/index.ts`), and `validateContractEntry` already rejects malformed
+ * entries before they reach this point for list responses.
+ */
+function asWatchedContract(dto: ContractDto): WatchedContract {
+  return dto as unknown as WatchedContract
+}
+
 export function createContract(
   contract: WatchedContract
 ): Promise<WatchedContract> {
-  return apiFetch<WatchedContract>('/contracts', {
+  return apiFetch<ContractDto>('/contracts', {
     method: 'POST',
     body: serializeContract(contract),
-  })
+  }).then(asWatchedContract)
 }
 
 export function updateContract(
   contract: WatchedContract
 ): Promise<WatchedContract> {
-  return apiFetch<WatchedContract>(
+  return apiFetch<ContractDto>(
     `/contracts/${encodeURIComponent(contract.id)}`,
     {
       method: 'PUT',
       body: serializeContract(contract),
     }
-  )
+  ).then(asWatchedContract)
 }
 
 export function removeContract(id: string): Promise<void> {

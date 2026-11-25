@@ -82,4 +82,16 @@ describe('Content-Security-Policy connect-src', () => {
     expect(directive).toContain('https://soroban-testnet.stellar.org')
     expect(directive).toContain('https://rpc-futurenet.stellar.org')
   })
+
+  it('locks down base-uri, object-src, form-action and frame-ancestors', async () => {
+    const headers = await nextConfig.headers()
+    const policy = headers?.[0].headers.find(
+      (header) => header.key === 'Content-Security-Policy'
+    )?.value
+
+    expect(policy).toContain("base-uri 'self'")
+    expect(policy).toContain("object-src 'none'")
+    expect(policy).toContain("form-action 'self'")
+    expect(policy).toContain("frame-ancestors 'none'")
+  })
 })
