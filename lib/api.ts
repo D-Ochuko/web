@@ -1,3 +1,5 @@
+import { validateContractEntry } from "./validation";
+import type { WatchedContract } from "./types";
 import { horizonUrl, isValidContractId } from '@/lib/stellar'
 import { SIGNATURE_HEADER, signWebhookPayload } from './webhookSignature'
 import { selectTestDeliveryHeaders } from './webhookHeaders'
@@ -14,8 +16,21 @@ import { isValidFunctionName } from '@/lib/soroban'
 import { largeTransferAssetLabel } from '@/types'
 import type { AlertPayload, AlertRule, Network } from '@/types'
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? ''
+// ... existing imports and code above remain unchanged ...
 
+export async function pushContract(
+  contract: WatchedContract,
+  syncStatus: Record<string, SyncStatus>,
+): Promise<void> {
+  const isNew = !contract.id;
+
+  const serverRecord = isNew
+    ? await createContract(contract)
+    : await updateContract(contract);
+
+  const validated = validateContractEntry(serverRecord);
+  if (!validated) {
+    return;
 /**
  * Whether the app is running in API mode, i.e. a backend API URL is
  * configured. Single source of truth for API-mode detection.
@@ -315,8 +330,21 @@ export function ruleFromPayload(payload: AlertPayload): AlertRule | undefined {
     default:
       return undefined
   }
-}
 
+  const localKey = contract.id ?? contract.localId;
+  const serverKey = validated.id ?? localKey;
+
+  if (serverKey !== localKey) {
+    delete cache[localKey];
+    cache[serverKey] = validated;
+
+    const status = syncStatus[localKey];
+    if (status) {
+      delete syncStatus[localKey];
+      syncStatus[serverKey] = status;
+    }
+  } else {
+    cache[serverKey] = validated;
 /** localStorage key holding the pending sync-retry queue. */
 export const SYNC_RETRY_QUEUE_KEY = 'sync-retry-queue'
 
