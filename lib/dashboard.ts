@@ -1,7 +1,4 @@
-import { WatchedContract } from '@/types'
-import { hasActiveWebhooks } from '@/lib/contractsApi'
-
-import { AlertPayload, Network, WatchedContract } from '@/types'
+import { AlertPayload, WatchedContract } from '@/types'
 import { hasActiveWebhooks } from '@/lib/contractsApi'
 
 export type AlertSeverity = 'low' | 'medium' | 'high' | 'critical'
@@ -45,7 +42,7 @@ function toDate(value: string | number | Date): Date {
 
 function startOfHour(date: Date): Date {
   const d = new Date(date)
-  d.setMinutes(0, 0, 0, 0)
+  d.setMinutes(0, 0, 0)
   return d
 }
 
@@ -55,13 +52,25 @@ function startOfDay(date: Date): Date {
   return d
 }
 
-function groupKey(alert: AlertRecord | AlertPayload, groupBy: AlertGroupBy): string {
+function groupKey(
+  alert: AlertRecord | AlertPayload,
+  groupBy: AlertGroupBy
+): string {
   const value =
     groupBy === 'network'
       ? alert.network
       : (alert as { ruleType?: string }).ruleType ?? (alert as AlertPayload).rule_triggered
-      : (alert as any).ruleType ?? (alert as AlertPayload).rule_triggered
+      : ((alert as { ruleType?: string }).ruleType ??
+        (alert as AlertPayload).rule_triggered)
   return value && value.trim().length > 0 ? value : 'unknown'
+}
+
+/**
+ * Test deliveries (is_test === true) are simulated and must never contribute
+ * to dashboard counts or charts.
+ */
+export function isTestAlert(alert: AlertRecord | AlertPayload): boolean {
+  return (alert as { is_test?: boolean }).is_test === true
 }
 
 /**
@@ -87,7 +96,14 @@ export function bucketAlerts(
       const start = new Date(anchor.getTime() - i * HOUR_MS)
       const end = new Date(start.getTime() + HOUR_MS)
       const label = `${String(start.getHours()).padStart(2, '0')}:00`
-      buckets.push({ key: start.toISOString(), label, start, end, total: 0, byGroup: {} })
+      buckets.push({
+        key: start.toISOString(),
+        label,
+        start,
+        end,
+        total: 0,
+        byGroup: {},
+      })
     }
   } else {
     // Calendar-aligned daily buckets: step with setDate to prevent DST drift
@@ -97,23 +113,35 @@ export function bucketAlerts(
       start.setDate(today.getDate() - i)
       const end = new Date(start)
       end.setDate(start.getDate() + 1)
-      const label = start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-      buckets.push({ key: start.toISOString(), label, start, end, total: 0, byGroup: {} })
+      const label = start.toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+      })
+      buckets.push({
+        key: start.toISOString(),
+        label,
+        start,
+        end,
+        total: 0,
+        byGroup: {},
+      })
     }
   }
 
   const groups = new Set<string>()
 
   for (const alert of alerts) {
+    if (isTestAlert(alert)) continue
+
     const time =
       typeof (alert as { timestamp?: unknown }).timestamp === 'number'
-        ? ((alert as { timestamp: number }).timestamp)
-        : toDate((alert as { createdAt?: string | Date }).createdAt ?? (alert as { timestamp?: string | number | Date }).timestamp ?? 0).getTime()
+        ? (alert as { timestamp: number }).timestamp
+        : toDate(
+            (alert as { createdAt?: string | Date }).createdAt ??
+              (alert as { timestamp?: string | number | Date }).timestamp ??
+              0
+          ).getTime()
     if (Number.isNaN(time) || time === 0) continue
-      typeof (alert as any).timestamp === 'number'
-        ? (alert as any).timestamp
-        : toDate((alert as any).createdAt ?? (alert as any).timestamp).getTime()
-    if (Number.isNaN(time)) continue
 
     for (const bucket of buckets) {
       if (time >= bucket.start.getTime() && time < bucket.end.getTime()) {
@@ -145,7 +173,10 @@ export function migrateWatchedContracts(
   })) as WatchedContract[]
 }
 
-export function isContractPaused(contract: { enabled?: boolean; paused?: boolean }): boolean {
+export function isContractPaused(contract: {
+  enabled?: boolean
+  paused?: boolean
+}): boolean {
   return contract.enabled === false || contract.paused === true
 }
 
@@ -155,19 +186,11 @@ export function isContractPaused(contract: { enabled?: boolean; paused?: boolean
  */
 export function countActiveWebhooks(contracts: WatchedContract[]): number {
   return contracts.filter(hasActiveWebhooks).length
- * Unifies definition of active webhooks across the application:
- * contract must be enabled and have a non-empty webhook URL.
+}
+
+/**
+ * Counts alerts, excluding simulated test deliveries.
  */
-export function countActiveWebhooks(contracts: WatchedContract[]): number {
-  return contracts.filter(hasActiveWebhooks).length
-    enabled: (contract as any).enabled ?? true,
-  })) as WatchedContract[]
-}
-
-export function isContractPaused(contract: { enabled?: boolean }): boolean {
-  return contract.enabled === false
-}
-
-export function countActiveWebhooks(contracts: Array<{ enabled?: boolean; webhook_url?: string }>): number {
-  return contracts.filter((c) => !isContractPaused(c) && Boolean(c.webhook_url)).length
+export function countAlerts(alerts: Array<AlertRecord | AlertPayload>): number {
+  return alerts.filter((alert) => !isTestAlert(alert)).length
 }

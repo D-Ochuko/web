@@ -2,6 +2,7 @@ import { vi } from 'vitest'
 import { Address, StrKey, xdr } from '@stellar/stellar-sdk'
 import {
   contractExists,
+  deploymentBlocksSave,
   contractInstanceLedgerKey,
   getLedgerEntriesRequest,
 } from '@/lib/contractExists'
@@ -42,7 +43,9 @@ describe('getLedgerEntriesRequest', () => {
 
     const data = ledgerKey.contractData()
     expect(Address.fromScAddress(data.contract()).toString()).toBe(CONTRACT_ID)
-    expect(data.key().switch()).toEqual(xdr.ScValType.scvLedgerKeyContractInstance())
+    expect(data.key().switch()).toEqual(
+      xdr.ScValType.scvLedgerKeyContractInstance()
+    )
     expect(data.durability()).toEqual(xdr.ContractDataDurability.persistent())
   })
 })
@@ -53,31 +56,94 @@ describe('contractExists', () => {
   })
 
   it('reports found when the RPC returns an entry', async () => {
-    mockRpc({ jsonrpc: '2.0', id: 1, result: { entries: [{ contract: 'AAAA' }] } })
+    mockRpc({
+      jsonrpc: '2.0',
+      id: 1,
+      result: { entries: [{ contract: 'AAAA' }] },
+    })
 
-    await expect(contractExists('testnet', CONTRACT_ID)).resolves.toEqual({ status: 'found' })
+    await expect(contractExists('testnet', CONTRACT_ID)).resolves.toEqual({
+      status: 'found',
+    })
 
     const [url, init] = fetchMock().mock.calls[0]
     expect(url).toBe(sorobanRpcUrl('testnet'))
-    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json')
-    expect(JSON.parse(init.body).params.keys[0]).toBe(contractInstanceLedgerKey(CONTRACT_ID))
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe(
+      'application/json'
+    )
+    expect(JSON.parse(init.body).params.keys[0]).toBe(
+      contractInstanceLedgerKey(CONTRACT_ID)
+    )
   })
 
   it('reports not_found when the RPC returns no entries', async () => {
     mockRpc({ jsonrpc: '2.0', id: 1, result: { entries: [] } })
 
-    await expect(contractExists('mainnet', CONTRACT_ID)).resolves.toEqual({ status: 'not_found' })
+    await expect(contractExists('mainnet', CONTRACT_ID)).resolves.toEqual({
+      status: 'not_found',
+    })
+  })
+
+  it('reports found with liveUntilLedgerSeq when the entry is live', async () => {
+    mockRpc({
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        entries: [
+          {
+            key: 'AAAA',
+            xdr: 'BBBB',
+            lastModifiedLedgerSeq: 900,
+            liveUntilLedgerSeq: 2000,
+          },
+        ],
+        latestLedger: 1000,
+      },
+    })
+
+    await expect(contractExists('testnet', CONTRACT_ID)).resolves.toEqual({
+      status: 'found',
+      liveUntilLedgerSeq: 2000,
+    })
+  })
+
+  it('reports archived when the entry TTL is behind the latest ledger', async () => {
+    mockRpc({
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        entries: [
+          {
+            key: 'AAAA',
+            xdr: 'BBBB',
+            lastModifiedLedgerSeq: 100,
+            liveUntilLedgerSeq: 500,
+          },
+        ],
+        latestLedger: 1000,
+      },
+    })
+
+    await expect(contractExists('testnet', CONTRACT_ID)).resolves.toEqual({
+      status: 'archived',
+      liveUntilLedgerSeq: 500,
+    })
   })
 
   it('rejects malformed contract IDs without calling the RPC', async () => {
     await expect(contractExists('testnet', 'not-a-contract')).resolves.toEqual({
-      status: 'not_found',
+      status: 'invalid',
+      reason: 'Malformed contract ID',
     })
     expect(fetchMock()).not.toHaveBeenCalled()
   })
 
   it('reports unavailable (not not_found) on an RPC error, so saving is not blocked', async () => {
-    mockRpc({ jsonrpc: '2.0', id: 1, error: { code: -32602, message: 'invalid key' } })
+    mockRpc({
+      jsonrpc: '2.0',
+      id: 1,
+      error: { code: -32602, message: 'invalid key' },
+    })
 
     await expect(contractExists('testnet', CONTRACT_ID)).resolves.toEqual({
       status: 'unavailable',
@@ -113,33 +179,58 @@ describe('contractExists', () => {
   })
 
   it('reports unavailable on a timeout instead of hanging', async () => {
-    fetchMock().mockImplementation((_url: string, init: RequestInit) =>
-      new Promise((_resolve, reject) => {
-        init.signal!.addEventListener('abort', () =>
-          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
-        )
-      })
+    fetchMock().mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal!.addEventListener('abort', () =>
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+          )
+        })
     )
 
-    await expect(contractExists('testnet', CONTRACT_ID, { timeoutMs: 10 })).resolves.toEqual({
+    await expect(
+      contractExists('testnet', CONTRACT_ID, { timeoutMs: 10 })
+    ).resolves.toEqual({
       status: 'unavailable',
       reason: 'RPC timed out',
     })
   })
 
   it('reports unavailable when the caller aborts', async () => {
-    fetchMock().mockImplementation((_url: string, init: RequestInit) =>
-      new Promise((_resolve, reject) => {
-        init.signal!.addEventListener('abort', () =>
-          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
-        )
-      })
+    fetchMock().mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal!.addEventListener('abort', () =>
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+          )
+        })
     )
 
     const controller = new AbortController()
-    const pending = contractExists('testnet', CONTRACT_ID, { signal: controller.signal })
+    const pending = contractExists('testnet', CONTRACT_ID, {
+      signal: controller.signal,
+    })
     controller.abort()
 
-    await expect(pending).resolves.toEqual({ status: 'unavailable', reason: 'Request cancelled' })
+    await expect(pending).resolves.toEqual({
+      status: 'unavailable',
+      reason: 'Request cancelled',
+    })
+  })
+})
+
+describe('deploymentBlocksSave', () => {
+  it('blocks only an un-overridden not_found, e.g. when switching a contract to another network', () => {
+    expect(deploymentBlocksSave('not_found', false)).toBe(true)
+    expect(deploymentBlocksSave('not_found', true)).toBe(false)
+    for (const status of [
+      'found',
+      'archived',
+      'invalid',
+      'unavailable',
+      'idle',
+    ]) {
+      expect(deploymentBlocksSave(status, false)).toBe(false)
+    }
   })
 })

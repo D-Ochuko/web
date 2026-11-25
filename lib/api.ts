@@ -1,7 +1,17 @@
 import { horizonUrl, isValidContractId } from '@/lib/stellar'
 import { SIGNATURE_HEADER, signWebhookPayload } from './webhookSignature'
+import { selectTestDeliveryHeaders } from './webhookHeaders'
+import { formatWebhookBody } from './webhookFormat'
 import { sanitizeBodySnippet } from './bodySnippet'
 import { getAuthorizationHeader, notifyAuthRequired } from './apiAuth'
+import type {
+  AlertPayload,
+  AlertRule,
+  Network,
+  WebhookFormat,
+} from '@/types'
+import { isValidFunctionName } from '@/lib/soroban'
+import { largeTransferAssetLabel } from '@/types'
 import type { AlertPayload, AlertRule, Network } from '@/types'
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? ''
@@ -129,6 +139,11 @@ export interface TestWebhookResult {
   bodySnippet?: string | null
   /** Why the delivery could not be made (e.g. blocked URL, timeout). */
   error?: string
+  /**
+   * Where a 3xx receiver redirects to (origin and path only). Redirects are
+   * never followed, so this tells the user which URL to configure instead.
+   */
+  location?: string
 }
 
 /**
@@ -146,7 +161,7 @@ export const TEST_CONTRACT_ID =
 export function describeRule(rule: AlertRule): string {
   switch (rule.type) {
     case 'LargeTransfer':
-      return `${rule.type} (over ${rule.threshold_xlm} XLM)`
+      return `${rule.type} (over ${rule.threshold_xlm} ${largeTransferAssetLabel(rule)})`
     case 'FunctionCalled':
       return `${rule.type} (${rule.function_name.trim()})`
     case 'AdminFunctionCalled':
@@ -161,6 +176,11 @@ export interface BuildTestWebhookPayloadOptions {
   network?: Network
   /** Configured rule to simulate. Defaults to `AnyTransaction`. */
   rule?: AlertRule
+  /**
+   * For `AdminFunctionCalled`, which of the rule's function names to simulate.
+   * Ignored unless it is one of `function_names`; defaults to the first.
+   */
+  functionName?: string
   label?: string
   /** Overridable for deterministic previews/tests; defaults to now. */
   timestamp?: number
@@ -181,6 +201,7 @@ export function buildTestWebhookPayload({
   contractId,
   network = 'testnet',
   rule,
+  functionName,
   label = 'Test Alert',
   timestamp = Date.now(),
   transactionHash = TEST_TX_HASH,
@@ -205,7 +226,11 @@ export function buildTestWebhookPayload({
       payload.function_name = rule.function_name.trim()
       break
     case 'AdminFunctionCalled':
-      payload.function_name = rule.function_names[0]?.trim()
+      payload.function_name = (
+        functionName !== undefined && rule.function_names.includes(functionName)
+          ? functionName
+          : rule.function_names[0]
+      )?.trim()
       break
     default:
       break
@@ -228,6 +253,8 @@ export function ruleFromPayload(payload: AlertPayload): AlertRule | undefined {
         function_name: payload.function_name ?? '',
       }
     case 'AdminFunctionCalled':
+      // Allow-list: only a syntactically valid function name is accepted (#447)
+      if (!isValidFunctionName(payload.function_name ?? '')) return undefined
       return {
         type: 'AdminFunctionCalled',
         function_names: [payload.function_name ?? ''],
@@ -257,14 +284,47 @@ function canonicalJson(value: unknown): string {
 }
 
 /**
+ * How far a test payload's `timestamp` (ms) may be from server time before
+ * the proxy refuses to forward it (#401): 5 minutes, the same window
+ * receivers apply to the signature's `t=`.
+ */
+export const TEST_PAYLOAD_MAX_SKEW_MS = 5 * 60 * 1000
+
+export interface ParseCanonicalTestPayloadOptions {
+  /** Current time in ms; injectable for tests. Defaults to Date.now(). */
+  now?: number
+  /** Allowed distance from `now`, in ms. Defaults to 5 minutes. */
+  maxSkewMs?: number
+}
+
+/**
  * Parses a caller-supplied test payload body and returns it only if it is
  * exactly what buildTestWebhookPayload would produce for its own contract,
  * network, rule, label, timestamp and transaction hash. The proxy uses this
  * so it forwards dashboard-built test payloads verbatim (keeping the
  * browser's signature valid) without becoming a relay for arbitrary
- * content (#261). Returns null for anything else.
+ * content (#261). Payloads dated more than `maxSkewMs` before or after `now`
+ * are refused too, so a captured body cannot be replayed through the proxy
+ * indefinitely (#401). Returns null for anything else.
  */
-export function parseCanonicalTestPayload(body: string): AlertPayload | null {
+export function parseCanonicalTestPayload(
+  body: string,
+  format: WebhookFormat = 'json',
+  sentPayload?: unknown
+): AlertPayload | null {
+  if (format !== 'json') {
+    // Slack/Discord bodies hold only a summary, so the alert arrives as
+    // `payload`. It must be canonical, and the formatted body must be exactly
+    // what that alert renders to.
+    const alert = parseCanonicalTestPayload(JSON.stringify(sentPayload ?? null))
+    if (!alert) return null
+    return formatWebhookBody(alert, format) === body ? alert : null
+  }
+  {
+    now = Date.now(),
+    maxSkewMs = TEST_PAYLOAD_MAX_SKEW_MS,
+  }: ParseCanonicalTestPayloadOptions = {}
+): AlertPayload | null {
   let p: Record<string, unknown>
   try {
     p = JSON.parse(body)
@@ -284,6 +344,7 @@ export function parseCanonicalTestPayload(body: string): AlertPayload | null {
     return null
   if (typeof p.timestamp !== 'number' || !Number.isFinite(p.timestamp))
     return null
+  if (Math.abs(now - p.timestamp) > maxSkewMs) return null
   if (
     typeof p.transaction_hash !== 'string' ||
     !/^[0-9a-f]{64}$/.test(p.transaction_hash)
@@ -314,6 +375,13 @@ interface SendTestWebhookTransport {
    * HMAC-SHA256 (timestamped, `t=…,v1=…`) and sent in the `SIGNATURE_HEADER` header.
    */
   secret?: string
+  /** Body shape for the receiver. Absent = `json`. */
+  format?: WebhookFormat
+  /**
+   * Custom headers from the watched contract. Only names on the test-delivery
+   * allow-list are sent; the rest are dropped (see lib/webhookHeaders).
+   */
+  headers?: Record<string, string>
 }
 
 export type SendTestWebhookOptions = SendTestWebhookTransport &
@@ -327,7 +395,8 @@ export async function sendTestWebhook(
   webhookUrl: string,
   options: SendTestWebhookOptions
 ): Promise<TestWebhookResult> {
-  const { signalOrTimeoutMs = 10000, secret } = options
+  const { signalOrTimeoutMs = 10000, secret, format = 'json' } = options
+  const deliveryHeaders = selectTestDeliveryHeaders(options.headers)
   const payload =
     'payload' in options && options.payload
       ? options.payload
@@ -378,8 +447,12 @@ export async function sendTestWebhook(
   const signal = combinedController.signal
 
   try {
-    const body = JSON.stringify(payload)
+    const body =
+      format === 'json'
+        ? JSON.stringify(payload)
+        : formatWebhookBody(payload, format)
     const headers: Record<string, string> = {
+      ...deliveryHeaders,
       'Content-Type': 'application/json',
     }
     if (secret)
@@ -402,14 +475,13 @@ export async function sendTestWebhook(
           ...(headers[SIGNATURE_HEADER]
             ? { signature: headers[SIGNATURE_HEADER] }
             : {}),
+          ...(format !== 'json' ? { format, payload } : {}),
+          ...(Object.keys(deliveryHeaders).length > 0
+            ? { headers: deliveryHeaders }
+            : {}),
         }),
         signal,
       })
-      // The proxy reports the receiver's status in its JSON; its own HTTP
-      // status is not the receiver's.
-      const data = (await proxyRes.json().catch(() => ({}))) as {
-        status?: number
-        ok?: boolean
       // The proxy answers with the receiver's status, timing and body snippet
       // as JSON; its own HTTP status is not the receiver's.
       const data = (await proxyRes.json().catch(() => ({}))) as {
@@ -418,14 +490,17 @@ export async function sendTestWebhook(
         durationMs?: number
         bodySnippet?: string | null
         error?: string
+        location?: unknown
       }
       return {
         status: typeof data.status === 'number' ? data.status : proxyRes.status,
         ok: data.ok === true,
-      }
         durationMs: data.durationMs,
         bodySnippet: data.bodySnippet ?? null,
         ...(data.error ? { error: data.error } : {}),
+        ...(typeof data.location === 'string' && data.location
+          ? { location: data.location }
+          : {}),
       }
     }
 
@@ -446,13 +521,6 @@ export async function sendTestWebhook(
     } catch {
       // The status is what matters; a body that can't be read is not an error.
     }
-
-    const res = await fetch(webhookUrl, {
-      method: 'POST',
-      headers,
-      body,
-      signal,
-    })
 
     // The status is reported back rather than thrown on, so callers can show
     // the actual code; a non-2xx is still a failed delivery.

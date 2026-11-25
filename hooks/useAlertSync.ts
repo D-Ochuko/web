@@ -20,11 +20,16 @@ export interface AlertSyncState {
  *
  * Alerts are keyed by (contractId, network) so the same contract ID
  * registered on different networks does not mix alert history.
+ *
+ * When `contractEnabled` is false the poller is stopped entirely so a paused
+ * contract is not polled and does not fire notifications; it restarts when the
+ * contract is resumed.
  */
 export function useAlertSync(
   contractId: string | undefined,
   network: Network | string | undefined,
-  onNew?: (fresh: AlertPayload[]) => void
+  onNew?: (fresh: AlertPayload[]) => void,
+  contractEnabled: boolean = true
 ): AlertSyncState {
   const [state, setState] = useState<Omit<AlertSyncState, 'syncNow'>>({
     live: false,
@@ -43,6 +48,8 @@ export function useAlertSync(
   useEffect(() => {
     if (!contractId || !network || !isApiConfigured()) {
       setState((s) => ({ ...s, live: false, enabled: false }))
+    if (!contractId || !network || !isApiConfigured() || !contractEnabled) {
+      setState((s) => ({ ...s, enabled: false }))
       return
     }
     setState((s) => ({ ...s, enabled: true }))
@@ -58,6 +65,57 @@ export function useAlertSync(
       setState((s) => ({ ...s, live: false, enabled: false }))
     }
   }, [contractId, network, pollTrigger])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contractId, network, pollTrigger, contractEnabled])
+
+  return { ...state, syncNow }
+}
+
+/**
+ * Poll tx-watch-core for every enabled contract while mounted. This is the
+ * app-level runner (mounted once in the layout) so alerts sync and browser
+ * notifications fire regardless of which page is open. No-op when
+ * NEXT_PUBLIC_API_URL is unset (localStorage-only mode).
+ *
+ * Alerts are keyed by (contractId, network) so the same contract ID
+ * registered on different networks does not mix alert history.
+ */
+export function useAlertSyncAll(
+  contracts: Array<{ id: string; network: Network | string }>,
+  onNew?: (fresh: AlertPayload[], contractId: string, network: Network | string) => void
+): AlertSyncState {
+  const [state, setState] = useState<Omit<AlertSyncState, 'syncNow'>>({
+    live: false,
+    lastSync: null,
+    enabled: false,
+  })
+  const [pollTrigger, setPollTrigger] = useState(0)
+
+  const syncNow = () => setPollTrigger(p => p + 1)
+
+  // Stable key so the effect only re-runs when the set of contracts changes.
+  const contractsKey = contracts
+    .map((c) => `${c.id}:${c.network}`)
+    .sort()
+    .join('|')
+
+  useEffect(() => {
+    if (!isApiConfigured() || !contracts.length) return
+    setState((s) => ({ ...s, enabled: true }))
+
+    const cleanups = contracts.map(({ id, network }) =>
+      startAlertPolling(id, network, {
+        onSync: (fresh, at) => {
+          setState({ live: true, lastSync: at, enabled: true })
+          if (fresh.length) onNew?.(fresh, id, network)
+        },
+        onError: () => setState((s) => ({ ...s, live: false })),
+      })
+    )
+
+    return () => cleanups.forEach((stop) => stop())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contractsKey, pollTrigger])
 
   return { ...state, syncNow }
 }

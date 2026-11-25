@@ -7,13 +7,23 @@ import {
   requestAccess,
 } from '@stellar/freighter-api'
 import FreighterConnect from '@/components/FreighterConnect'
+import { broadcastWalletChangeIfChanged } from '@/lib/walletEvents'
 
 vi.mock('@stellar/freighter-api', () => ({
   isConnected: vi.fn(),
   getAddress: vi.fn(),
   getNetworkDetails: vi.fn(),
   requestAccess: vi.fn(),
+  WatchWalletChanges: vi.fn().mockImplementation(() => ({
+    watch: vi.fn(),
+    stop: vi.fn(),
+  })),
   signTransaction: vi.fn(),
+  // useWalletState instantiates this for the shared app-level watcher.
+  WatchWalletChanges: class {
+    watch() {}
+    stop() {}
+  },
 }))
 
 const mockIsConnected = vi.mocked(isConnected)
@@ -76,6 +86,28 @@ describe('FreighterConnect', () => {
   })
 
   describe('connection states', () => {
+    it('shares one extension probe across all wallet reads on mount', async () => {
+      mockConnectedSession()
+      // The current connected state is already known; initial probes should
+      // not announce it again and trigger another network sync.
+      broadcastWalletChangeIfChanged(MOCK_PUBLIC_KEY)
+
+      render(
+        <>
+          <FreighterConnect />
+          <FreighterConnect />
+        </>
+      )
+
+      await waitFor(() => {
+        expect(screen.getAllByText(/GAAA\.\.\.AAAA/)).toHaveLength(2)
+      })
+
+      expect(mockIsConnected).toHaveBeenCalledTimes(1)
+      expect(mockGetAddress).toHaveBeenCalledTimes(1)
+      expect(mockGetNetworkDetails).toHaveBeenCalledTimes(1)
+    })
+
     it('renders connect button when not connected', async () => {
       render(<FreighterConnect />)
       expect(
@@ -190,7 +222,12 @@ describe('FreighterConnect', () => {
       )
 
       await waitFor(() => {
-        expect(screen.getByText(/Freighter not installed/)).toBeInTheDocument()
+        expect(screen.getAllByText(/Freighter not installed/).length).toBeGreaterThan(0)
+        expect(
+          screen.getByText(
+            'Freighter not installed — install the extension and reload'
+          )
+        ).toBeInTheDocument()
         expect(
           screen.getByRole('link', { name: /Install Freighter/i })
         ).toHaveAttribute('href', 'https://www.freighter.app/')
@@ -200,7 +237,28 @@ describe('FreighterConnect', () => {
       })
     })
 
-    it('opens the install page with noopener,noreferrer', async () => {
+    it('does not auto-open the install page after a failed connect', async () => {
+      mockExtensionMissing()
+      const windowOpenSpy = vi
+        .spyOn(window, 'open')
+        .mockImplementation(() => null)
+
+      render(<FreighterConnect />)
+
+      fireEvent.click(
+        await screen.findByRole('button', { name: /Connect Freighter/ })
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText(/Freighter not installed/)).toBeInTheDocument()
+      })
+
+      expect(windowOpenSpy).not.toHaveBeenCalled()
+
+      windowOpenSpy.mockRestore()
+    })
+
+    it('opens the install page with noopener,noreferrer when the link is clicked', async () => {
       mockExtensionMissing()
       const windowOpenSpy = vi
         .spyOn(window, 'open')
@@ -224,6 +282,62 @@ describe('FreighterConnect', () => {
       )
 
       windowOpenSpy.mockRestore()
+    })
+
+    it('re-checks for Freighter when returning from the install page', async () => {
+      mockExtensionMissing()
+
+      render(<FreighterConnect />)
+
+      fireEvent.click(
+        await screen.findByRole('button', { name: /Connect Freighter/ })
+      )
+
+      const installLink = await screen.findByRole('link', {
+        name: /Install Freighter/i,
+      })
+      mockConnectedSession()
+      fireEvent.click(installLink)
+      mockIsConnected.mockClear()
+      fireEvent.focus(window)
+
+      await waitFor(() => {
+        expect(
+          screen.queryByText(
+            'Freighter not installed — install the extension and reload'
+          )
+        ).not.toBeInTheDocument()
+      })
+      expect(mockIsConnected).toHaveBeenCalledTimes(1)
+    })
+
+    it('removes the install focus listener when unmounted', async () => {
+      mockExtensionMissing()
+      const addEventListenerSpy = vi.spyOn(window, 'addEventListener')
+      const removeEventListenerSpy = vi.spyOn(window, 'removeEventListener')
+
+      const { unmount } = render(<FreighterConnect />)
+
+      fireEvent.click(
+        await screen.findByRole('button', { name: /Connect Freighter/ })
+      )
+      const installLink = await screen.findByRole('link', {
+        name: /Install Freighter/i,
+      })
+      fireEvent.click(installLink)
+
+      const focusListener = addEventListenerSpy.mock.calls.find(
+        ([eventName]) => eventName === 'focus'
+      )?.[1]
+      unmount()
+
+      expect(focusListener).toBeDefined()
+      expect(removeEventListenerSpy).toHaveBeenCalledWith(
+        'focus',
+        focusListener
+      )
+      addEventListenerSpy.mockRestore()
+      removeEventListenerSpy.mockRestore()
     })
 
     it('allows retrying detection after extension is installed', async () => {
@@ -268,6 +382,23 @@ describe('FreighterConnect', () => {
       })
     })
 
+    it('calls onConnect exactly once after a user-initiated connection', async () => {
+      const onConnect = vi.fn()
+      mockDisconnectedSession()
+
+      render(<FreighterConnect onConnect={onConnect} />)
+
+      fireEvent.click(
+        await screen.findByRole('button', { name: /Connect Freighter/ })
+      )
+
+      await waitFor(() => {
+        expect(screen.getByText('Disconnect')).toBeInTheDocument()
+      })
+      expect(onConnect).toHaveBeenCalledTimes(1)
+      expect(onConnect).toHaveBeenCalledWith(MOCK_PUBLIC_KEY)
+    })
+
     it('calls onConnect callback on initial mount if already connected', async () => {
       const onConnect = vi.fn()
       mockConnectedSession()
@@ -296,7 +427,7 @@ describe('FreighterConnect', () => {
       })
       expect(onConnect).toHaveBeenCalledWith(MOCK_PUBLIC_KEY)
       expect(localStorage.getItem(WALLET_STORAGE_KEY)).toBeNull()
-      expect((window as any).__freighterPublicKey).toBeUndefined()
+      expect(window.__freighterPublicKey).toBeUndefined()
     })
 
     it('does not leave a stale key behind after disconnecting', async () => {
