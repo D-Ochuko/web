@@ -24,7 +24,7 @@ This document maps key files and directories to their functional areas, helping 
 | `ContractCard.tsx`     | Contract summary card — displays contract info, network badge    |
 | `RuleBuilder.tsx`      | Alert rule configuration — form inputs for all rule types        |
 | `AlertRuleBadge.tsx`   | Rule type display — badge styling and labels for each rule type  |
-| `WebhookLog.tsx`       | Webhook delivery history table — status, timestamps, retry info  |
+| `WebhookLog.tsx`       | Webhook delivery history table — status, timestamps, retry info   |
 | `NetworkBadge.tsx`     | Network indicator — Mainnet/Testnet/Futurenet badge              |
 | `CopyButton.tsx`       | Clipboard utility — copy contract ID, transaction hash           |
 | `MobileNav.tsx`        | Mobile navigation drawer — responsive menu                       |
@@ -76,10 +76,10 @@ This document maps key files and directories to their functional areas, helping 
 | File                 | Responsibility                          |
 | -------------------- | --------------------------------------- |
 | `package.json`       | Dependencies, scripts, project metadata |
-| `tsconfig.json`      | TypeScript configuration                |
+| `tsconfig.json`      | TypeScript configuration                 |
 | `tailwind.config.ts` | Tailwind CSS theme, colors, spacing     |
 | `next.config.mjs`    | Next.js build configuration             |
-| `postcss.config.mjs` | PostCSS plugins (Tailwind)              |
+| `postcss.config.mjs` | PostCSS plugins                         |
 | `.eslintrc.json`     | ESLint rules for code quality           |
 | `.env.example`       | Environment variable template           |
 
@@ -88,72 +88,27 @@ This document maps key files and directories to their functional areas, helping 
 | File                     | Responsibility                                                         |
 | ------------------------ | ---------------------------------------------------------------------- |
 | `README.md`              | Project overview, setup, tech stack, integration guide                 |
-| `CONTRIBUTING.md`        | Contribution guidelines, branch naming, commit style, PR checklist     |
-| `docs/storage-schema.md` | Browser storage keys, persisted shapes, limits, and migration workflow |
-| `GLOSSARY.md`            | Terminology definitions for new contributors                           |
-| `LICENSE`                | MIT license                                                            |
+| `CONTRIBUTING.md`        | Contribution guidelines, branch naming, commit style, PR checklist    |
 
-## Feature Areas & Key Files
+## Alert Polling
 
-### Wallet Integration
+Alert polling is driven by `lib/startAlertPolling.ts` (per-contract poll loops) and consumed by `hooks/useAlertSync.ts`.
 
-**Primary**: `components/FreighterConnect.tsx`  
-**Secondary**: `lib/freighter.ts` (`@stellar/freighter-api` wrapper)  
-**Related**: `app/layout.tsx` (provider setup)
+### Jitter
 
-### Contract Management
+`nextPollDelay` applies ±20% random jitter to the base 30 s interval so that many watched contracts (and many clients) do not all poll in lock-step. This spreads load and prevents synchronized retry storms after a core outage.
 
-**Primary**: `lib/storage.ts` (persistence), `lib/api.ts` (backend calls)  
-**Secondary**: `app/contracts/new/page.tsx` (registration form), `app/contracts/[id]/page.tsx` (detail view)  
-**Related**: `components/ContractCard.tsx`, `types/index.ts`
+### Batched requests (assumed core route)
 
-### Alert Rules
-
-**Primary**: `components/RuleBuilder.tsx` (UI), `types/index.ts` (types)  
-**Secondary**: `app/contracts/[id]/page.tsx` (rule management)  
-**Related**: `components/AlertRuleBadge.tsx` (display)
-
-### Webhook Delivery
-
-**Primary**: `components/WebhookLog.tsx` (history display), `lib/api.ts` (test webhook)  
-**Secondary**: `app/contracts/[id]/page.tsx` (webhook settings)  
-**Related**: `types/index.ts` (WebhookLog type)
-
-### Stellar Network Integration
-
-**Primary**: `lib/stellar.ts` (all network queries)  
-**Secondary**: `lib/api.ts` (API calls), `types/index.ts` (network types)  
-**Related**: `components/NetworkBadge.tsx` (display)
-
-## When to Modify Each Area
-
-| Task                     | Files to Change                                                                 |
-| ------------------------ | ------------------------------------------------------------------------------- |
-| Add new alert rule type  | `types/index.ts`, `components/RuleBuilder.tsx`, `components/AlertRuleBadge.tsx` |
-| Add new page             | `app/*/page.tsx`, update `components/MobileNav.tsx`                             |
-| Add new component        | Create in `/components`, export from component file                             |
-| Add Stellar query        | Add function to `lib/stellar.ts`                                                |
-| Add backend API call     | Add function to `lib/api.ts`                                                    |
-| Add type definition      | Add to `types/index.ts` (keep in sync with Rust core)                           |
-| Update styling           | `tailwind.config.ts` or component `className`                                   |
-| Update environment setup | `.env.example`, `CONTRIBUTING.md`                                               |
-
-## Dependency Graph
+Polling prefers a batched request:
 
 ```
-Pages (app/*)
-  ↓
-Components (components/*)
-  ↓
-Business Logic (lib/*)
-  ↓
-Types (types/index.ts)
-  ↓
-External APIs (Stellar, Backend)
+GET /alerts?contracts=<id:net,…>&since=<cursor>
 ```
 
-Most changes flow from types → logic → components → pages. When adding a feature:
+> **Note:** This is an **assumed core route** — it is not yet guaranteed by stellar-txwatch-core. The client treats it as best-effort.
 
+If the batched route is unavailable (404/405) or fails, the client falls back to per-contract polling (`GET /alerts?contract=<id>&network=<net>&since=<cursor>`) so behavior degrades gracefully until the core route lands.
 1. Define types in `types/index.ts`
 2. Add logic to `lib/stellar.ts` or `lib/api.ts`
 3. Create/update components in `/components`

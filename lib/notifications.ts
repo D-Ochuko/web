@@ -5,6 +5,15 @@ import { formatAmount } from '@/lib/format'
 
 export const NOTIFY_THROTTLE_MS = 10000
 
+/**
+ * Background tabs poll at a slower cadence so notifications can still arrive
+ * while the user is looking elsewhere. Polling cannot run when the browser is
+ * closed; Web Push would be required for that (tracked as a follow-up).
+ */
+export const BACKGROUND_POLL_INTERVAL_MS = 120000
+
+const LEADER_LOCK_NAME = 'txwatch:alert-poll-leader'
+
 interface ContractNotificationState {
   lastNotifiedAt: number
   queuedAlerts: AlertPayload[]
@@ -57,6 +66,24 @@ export function disableNotifications(): void {
   try {
     localStorage.setItem(NOTIFICATIONS_KEY, '0')
   } catch {}
+}
+
+/**
+ * Elect a single leader tab for background polling (see #43). Uses the Web
+ * Locks API when available so only one tab polls while hidden, avoiding
+ * duplicate notifications. Falls back to allowing polling when unsupported.
+ */
+export async function acquireBackgroundPollLeader(): Promise<boolean> {
+  if (typeof navigator === 'undefined' || !('locks' in navigator)) return true
+  try {
+    return await navigator.locks.request(
+      LEADER_LOCK_NAME,
+      { ifAvailable: true },
+      async (lock) => lock !== null
+    )
+  } catch {
+    return true
+  }
 }
 
 function ruleLabel(ruleType: string): string {
