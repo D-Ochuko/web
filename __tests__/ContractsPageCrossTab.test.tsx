@@ -3,9 +3,8 @@
  * and responsive filter bar behaviour (issue #81).
  */
 
-import { render, screen, act, fireEvent } from '@testing-library/react';
-import ContractsClient from '../app/contracts/ContractsClient';
-import { getContracts } from '../lib/storage'; // Note: Ensure the mock targets `storage.ts`
+import { render, screen, act, fireEvent } from '@testing-library/react'
+import { getContracts } from '../lib/storage' // Note: Ensure the mock targets `storage.ts`
 
 const PAGE_SIZE = 12
 
@@ -122,11 +121,15 @@ describe('contracts page — search', () => {
   })
 
   it('searches by label case-insensitively', () => {
-    expect(applySearch(items, 'ESCROW')).toEqual([{ label: 'Escrow Manager', contract_id: 'ABC123' }])
+    expect(applySearch(items, 'ESCROW')).toEqual([
+      { label: 'Escrow Manager', contract_id: 'ABC123' },
+    ])
   })
 
   it('searches by contract id substring', () => {
-    expect(applySearch(items, '456')).toEqual([{ label: 'Payment Router', contract_id: 'DEF456' }])
+    expect(applySearch(items, '456')).toEqual([
+      { label: 'Payment Router', contract_id: 'DEF456' },
+    ])
   })
 
   it('returns no matches when search does not match any contract', () => {
@@ -190,7 +193,10 @@ describe('contracts page — new contract highlight (issue #55)', () => {
     const scrollIntoView = jest.fn()
     const element = { scrollIntoView } as unknown as HTMLElement
     element.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' })
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      behavior: 'smooth',
+      block: 'center',
+    })
   })
 })
 
@@ -221,13 +227,19 @@ describe('contracts page — bulk selection (issue #52)', () => {
     return list.length > 0 && list.every((c) => selected.has(c.id))
   }
 
-  function totalAlertRecords(selected: Set<string>, list: ContractItem[]): number {
+  function totalAlertRecords(
+    selected: Set<string>,
+    list: ContractItem[]
+  ): number {
     return list
       .filter((c) => selected.has(c.id))
       .reduce((sum, c) => sum + c.alert_count, 0)
   }
 
-  function selectedLabels(selected: Set<string>, list: ContractItem[]): string[] {
+  function selectedLabels(
+    selected: Set<string>,
+    list: ContractItem[]
+  ): string[] {
     return list.filter((c) => selected.has(c.id)).map((c) => c.label)
   }
 
@@ -311,7 +323,8 @@ describe('contracts page — URL state sync (issue #42)', () => {
       : DEFAULTS.view
 
     const pageParam = Number.parseInt(params.get('page') ?? '', 10)
-    const page = Number.isFinite(pageParam) && pageParam >= 1 ? pageParam : DEFAULTS.page
+    const page =
+      Number.isFinite(pageParam) && pageParam >= 1 ? pageParam : DEFAULTS.page
 
     return { q, network, sort, view, page }
   }
@@ -327,7 +340,9 @@ describe('contracts page — URL state sync (issue #42)', () => {
   }
 
   it('reads initial state from the URL params', () => {
-    const params = new URLSearchParams('q=escrow&network=testnet&sort=alerts&view=list&page=3')
+    const params = new URLSearchParams(
+      'q=escrow&network=testnet&sort=alerts&view=list&page=3'
+    )
     expect(parseState(params)).toEqual({
       q: 'escrow',
       network: 'testnet',
@@ -342,7 +357,9 @@ describe('contracts page — URL state sync (issue #42)', () => {
   })
 
   it('falls back to defaults for unknown network, sort and view values', () => {
-    const params = new URLSearchParams('network=devnet&sort=random&view=carousel')
+    const params = new URLSearchParams(
+      'network=devnet&sort=random&view=carousel'
+    )
     expect(parseState(params)).toEqual(DEFAULTS)
   })
 
@@ -398,31 +415,31 @@ describe('contracts page — URL state sync (issue #42)', () => {
   })
 })
 
-import { render, screen, act, fireEvent } from '@testing-library/react';
-import ContractsPage from '../app/contracts/page';
-import { getContracts } from '@/lib/storage';
-import { refreshContracts } from '@/lib/contractSync';
+import { render, screen, act, fireEvent } from '@testing-library/react'
+import ContractsPage from '../app/contracts/page'
+import { getContracts } from '@/lib/storage'
+import { refreshContracts } from '@/lib/contractSync'
 
 jest.mock('@/lib/storage', () => ({
   getContracts: jest.fn(),
   getAlerts: jest.fn(() => []),
   deleteContract: jest.fn(),
-}));
+}))
 
 jest.mock('@/lib/contractSync', () => ({
   refreshContracts: jest.fn(),
-}));
+}))
 
 type WatchedContract = {
-  id: string;
-  label: string;
-  contract_id: string;
-  network: string;
-  rules: unknown[];
-  webhook_url: string | null;
-  created_at: string;
-  updated_at: string;
-};
+  id: string
+  label: string
+  contract_id: string
+  network: string
+  rules: unknown[]
+  webhook_url: string | null
+  created_at: string
+  updated_at: string
+}
 
 const makeContract = (
   overrides: Partial<WatchedContract> & { id: string; label: string }
@@ -434,169 +451,161 @@ const makeContract = (
   created_at: '2024-01-01T00:00:00.000Z',
   updated_at: '2024-01-01T00:00:00.000Z',
   ...overrides,
-});
+})
 
-const contractA = makeContract({ id: 'a', label: 'Alpha' });
-const contractB = makeContract({ id: 'b', label: 'Beta' });
+const contractA = makeContract({ id: 'a', label: 'Alpha' })
+const contractB = makeContract({ id: 'b', label: 'Beta' })
 
 const makeContracts = (count: number) =>
   Array.from({ length: count }, (_, i) =>
     makeContract({ id: `c${i}`, label: `Contract ${i}` })
-  );
+  )
 
 describe('ContractsPage cross-tab updates', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-    (getContracts as jest.Mock).mockReturnValue([contractA]);
-  });
+    jest.clearAllMocks()
+    ;(getContracts as jest.Mock).mockReturnValue([contractA])
+  })
 
   it('renders the initial contracts list', () => {
-    render(<ContractsPage />);
-    expect(screen.getByText('Alpha')).toBeInTheDocument();
-  });
+    render(<ContractsPage />)
+    expect(screen.getByText('Alpha')).toBeInTheDocument()
+  })
 
   it('updates the list when a contract is added in another tab', () => {
-    render(<ContractsPage />);
-    expect(screen.queryByText('Beta')).not.toBeInTheDocument();
+    render(<ContractsPage />)
+    expect(screen.queryByText('Beta')).not.toBeInTheDocument()
 
-    (getContracts as jest.Mock).mockReturnValue([contractA, contractB]);
+    ;(getContracts as jest.Mock).mockReturnValue([contractA, contractB])
     act(() => {
-      window.dispatchEvent(
-        new StorageEvent('storage', { key: 'contracts' })
-      );
-    });
+      window.dispatchEvent(new StorageEvent('storage', { key: 'contracts' }))
+    })
 
-    expect(screen.getByText('Beta')).toBeInTheDocument();
-  });
+    expect(screen.getByText('Beta')).toBeInTheDocument()
+  })
 
   it('updates the list when a contract is deleted in another tab', () => {
-    (getContracts as jest.Mock).mockReturnValue([contractA, contractB]);
-    render(<ContractsPage />);
-    expect(screen.getByText('Beta')).toBeInTheDocument();
+    ;(getContracts as jest.Mock).mockReturnValue([contractA, contractB])
+    render(<ContractsPage />)
+    expect(screen.getByText('Beta')).toBeInTheDocument()
 
-    (getContracts as jest.Mock).mockReturnValue([contractA]);
+    ;(getContracts as jest.Mock).mockReturnValue([contractA])
     act(() => {
-      window.dispatchEvent(
-        new StorageEvent('storage', { key: 'contracts' })
-      );
-    });
+      window.dispatchEvent(new StorageEvent('storage', { key: 'contracts' }))
+    })
 
-    expect(screen.queryByText('Beta')).not.toBeInTheDocument();
-  });
+    expect(screen.queryByText('Beta')).not.toBeInTheDocument()
+  })
 
   it('keeps the highlight logic working after a cross-tab update', () => {
-    render(<ContractsPage />);
+    render(<ContractsPage />)
 
-    (getContracts as jest.Mock).mockReturnValue([contractA, contractB]);
+    ;(getContracts as jest.Mock).mockReturnValue([contractA, contractB])
     act(() => {
-      window.dispatchEvent(
-        new StorageEvent('storage', { key: 'contracts' })
-      );
-    });
+      window.dispatchEvent(new StorageEvent('storage', { key: 'contracts' }))
+    })
 
-    expect(refreshContracts).toHaveBeenCalled();
-    expect(screen.getByText('Beta')).toBeInTheDocument();
-  });
-});
+    expect(refreshContracts).toHaveBeenCalled()
+    expect(screen.getByText('Beta')).toBeInTheDocument()
+  })
+})
 
 describe('ContractsPage pagination', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-  });
+    jest.clearAllMocks()
+  })
 
   it('resets to page 1 when the sort changes', () => {
-    (getContracts as jest.Mock).mockReturnValue(makeContracts(30));
-    render(<ContractsPage />);
+    ;(getContracts as jest.Mock).mockReturnValue(makeContracts(30))
+    render(<ContractsPage />)
 
-    fireEvent.click(screen.getByRole('button', { name: /next/i }));
-    expect(screen.getByText('Contract 10')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /next/i }))
+    expect(screen.getByText('Contract 10')).toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText(/sort/i), {
       target: { value: 'name' },
-    });
+    })
 
-    expect(screen.getByText('Contract 0')).toBeInTheDocument();
-  });
+    expect(screen.getByText('Contract 0')).toBeInTheDocument()
+  })
 
   it('resets to page 1 when the view mode changes', () => {
-    (getContracts as jest.Mock).mockReturnValue(makeContracts(30));
-    render(<ContractsPage />);
+    ;(getContracts as jest.Mock).mockReturnValue(makeContracts(30))
+    render(<ContractsPage />)
 
-    fireEvent.click(screen.getByRole('button', { name: /next/i }));
-    expect(screen.getByText('Contract 10')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /next/i }))
+    expect(screen.getByText('Contract 10')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: /by network/i }));
+    fireEvent.click(screen.getByRole('button', { name: /by network/i }))
 
-    expect(screen.getByText('Contract 0')).toBeInTheDocument();
-  });
+    expect(screen.getByText('Contract 0')).toBeInTheDocument()
+  })
 
   it('paginates the grouped By Network view', () => {
-    (getContracts as jest.Mock).mockReturnValue(makeContracts(30));
-    render(<ContractsPage />);
+    ;(getContracts as jest.Mock).mockReturnValue(makeContracts(30))
+    render(<ContractsPage />)
 
-    fireEvent.click(screen.getByRole('button', { name: /by network/i }));
+    fireEvent.click(screen.getByRole('button', { name: /by network/i }))
 
-    expect(screen.getByText('Contract 0')).toBeInTheDocument();
-    expect(screen.queryByText('Contract 10')).not.toBeInTheDocument();
-  });
+    expect(screen.getByText('Contract 0')).toBeInTheDocument()
+    expect(screen.queryByText('Contract 10')).not.toBeInTheDocument()
+  })
 
   it('shows the pager in the grouped By Network view', () => {
-    (getContracts as jest.Mock).mockReturnValue(makeContracts(30));
-    render(<ContractsPage />);
+    ;(getContracts as jest.Mock).mockReturnValue(makeContracts(30))
+    render(<ContractsPage />)
 
-    fireEvent.click(screen.getByRole('button', { name: /by network/i }));
+    fireEvent.click(screen.getByRole('button', { name: /by network/i }))
 
-    expect(screen.getByRole('button', { name: /next/i })).toBeInTheDocument();
-  });
-});
+    expect(screen.getByRole('button', { name: /next/i })).toBeInTheDocument()
+  })
+})
 
 describe('ContractsPage network filter counts and heading', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-  });
+    jest.clearAllMocks()
+  })
 
   const networkContracts = [
     makeContract({ id: 'a', label: 'Alpha', network: 'mainnet' }),
     makeContract({ id: 'b', label: 'Beta', network: 'mainnet' }),
     makeContract({ id: 'c', label: 'Gamma', network: 'testnet' }),
-  ];
+  ]
 
   it('computes network pill counts from the search-filtered set', () => {
-    (getContracts as jest.Mock).mockReturnValue(networkContracts);
-    render(<ContractsPage />);
+    ;(getContracts as jest.Mock).mockReturnValue(networkContracts)
+    render(<ContractsPage />)
 
     fireEvent.change(screen.getByLabelText(/search/i), {
       target: { value: 'Alpha' },
-    });
+    })
 
-    const mainnetPill = screen.getByRole('button', { name: /mainnet/i });
-    const testnetPill = screen.getByRole('button', { name: /testnet/i });
+    const mainnetPill = screen.getByRole('button', { name: /mainnet/i })
+    const testnetPill = screen.getByRole('button', { name: /testnet/i })
 
-    expect(mainnetPill).toHaveTextContent('1');
-    expect(testnetPill).toHaveTextContent('0');
-  });
+    expect(mainnetPill).toHaveTextContent('1')
+    expect(testnetPill).toHaveTextContent('0')
+  })
 
   it('shows "Showing X of Y contracts" when a search filter is active', () => {
-    (getContracts as jest.Mock).mockReturnValue(networkContracts);
-    render(<ContractsPage />);
+    ;(getContracts as jest.Mock).mockReturnValue(networkContracts)
+    render(<ContractsPage />)
 
     fireEvent.change(screen.getByLabelText(/search/i), {
       target: { value: 'Alpha' },
-    });
+    })
 
-    expect(
-      screen.getByText(/showing 1 of 3 contracts/i)
-    ).toBeInTheDocument();
-  });
+    expect(screen.getByText(/showing 1 of 3 contracts/i)).toBeInTheDocument()
+  })
 
   it('keeps the plain registered heading when no filter is active', () => {
-    (getContracts as jest.Mock).mockReturnValue(networkContracts);
-    render(<ContractsPage />);
+    ;(getContracts as jest.Mock).mockReturnValue(networkContracts)
+    render(<ContractsPage />)
 
-    expect(screen.getByText(/3 registered/i)).toBeInTheDocument();
-    expect(screen.queryByText(/showing/i)).not.toBeInTheDocument();
-  });
-});
+    expect(screen.getByText(/3 registered/i)).toBeInTheDocument()
+    expect(screen.queryByText(/showing/i)).not.toBeInTheDocument()
+  })
+})
 
 describe('contracts page — bulk selection (issue #216 paginated scope)', () => {
   type ContractItem = { id: string; label: string; alert_count: number }
@@ -607,9 +616,12 @@ describe('contracts page — bulk selection (issue #216 paginated scope)', () =>
     { id: '3', label: 'Token Service', alert_count: 5 },
   ]
 
-  function selectPage(selected: Set<string>, paginated: ContractItem[]): Set<string> {
+  function selectPage(
+    selected: Set<string>,
+    paginated: ContractItem[]
+  ): Set<string> {
     const next = new Set(selected)
-    paginated.forEach(c => next.add(c.id))
+    paginated.forEach((c) => next.add(c.id))
     return next
   }
 
@@ -630,6 +642,8 @@ describe('contracts page — bulk selection (issue #216 paginated scope)', () =>
     const selected = selectAllFiltered(items)
     expect(selected.size).toBe(3)
     expect(selected.has('3')).toBe(true)
+  })
+})
 
 jest.mock('../lib/contractSync', () => ({
   ...jest.requireActual('../lib/contractSync'),
@@ -648,23 +662,27 @@ describe('contracts page — bulk delete API sync (issue #215)', () => {
 
   it('awaits Promise.allSettled and reports partial failures correctly', async () => {
     const mockSyncDelete = syncDeleteContract as jest.Mock
-    
+
     // Simulate one success and one failure
     mockSyncDelete.mockImplementation((id: string) => {
-      if (id === 'fail-id') return Promise.resolve({ ok: false, error: 'Server error' })
+      if (id === 'fail-id')
+        return Promise.resolve({ ok: false, error: 'Server error' })
       return Promise.resolve({ ok: true })
     })
 
     const selectedIds = ['success-id', 'fail-id']
-    
+
     // Run the Promise.allSettled logic directly as implemented in the component
     const results = await Promise.allSettled(
-      selectedIds.map(id => mockSyncDelete(id))
+      selectedIds.map((id) => mockSyncDelete(id))
     )
 
     let failCount = 0
     results.forEach((res) => {
-      if (res.status === 'rejected' || (res.status === 'fulfilled' && !res.value.ok)) {
+      if (
+        res.status === 'rejected' ||
+        (res.status === 'fulfilled' && !res.value.ok)
+      ) {
         failCount++
       }
     })
@@ -739,15 +757,22 @@ describe('contracts page — rule type and paused state filtering (issue #219)',
   })
 
   it('filters by multiple rule types (union matching)', () => {
-    const matched = filterContracts(contracts, 'all', ['AdminFunctionCalled', 'TransactionFailed'])
+    const matched = filterContracts(contracts, 'all', [
+      'AdminFunctionCalled',
+      'TransactionFailed',
+    ])
     expect(matched.map((c) => c.id)).toEqual(['c1', 'c3'])
   })
 
   it('combines status and rule type filters', () => {
-    const activeAdmin = filterContracts(contracts, 'active', ['AdminFunctionCalled'])
+    const activeAdmin = filterContracts(contracts, 'active', [
+      'AdminFunctionCalled',
+    ])
     expect(activeAdmin.map((c) => c.id)).toEqual(['c1'])
 
-    const pausedAdmin = filterContracts(contracts, 'paused', ['AdminFunctionCalled'])
+    const pausedAdmin = filterContracts(contracts, 'paused', [
+      'AdminFunctionCalled',
+    ])
     expect(pausedAdmin).toHaveLength(0)
   })
 
@@ -757,7 +782,10 @@ describe('contracts page — rule type and paused state filtering (issue #219)',
     params.set('ruleTypes', 'AdminFunctionCalled,LargeTransfer')
 
     expect(params.get('status')).toBe('paused')
-    expect(params.get('ruleTypes')?.split(',')).toEqual(['AdminFunctionCalled', 'LargeTransfer'])
+    expect(params.get('ruleTypes')?.split(',')).toEqual([
+      'AdminFunctionCalled',
+      'LargeTransfer',
+    ])
   })
 })
 
@@ -773,7 +801,7 @@ describe('contracts page — refresh failure banner and retry (issue #218)', () 
     expect(res.error).toBe('Network connection failed (503)')
 
     // Simulating banner state
-    let refreshError: string | null = res.error
+    const refreshError: string | null = res.error
     let bannerDismissed = false
 
     const dismissBanner = () => {

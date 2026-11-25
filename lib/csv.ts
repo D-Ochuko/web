@@ -13,10 +13,15 @@ const FORMULA_TRIGGERS = ['=', '+', '-', '@', '\t', '\r']
 /**
  * Field names that must never be written to a CSV export.
  *
- * Webhook signing secrets are sensitive credentials; they are excluded from
- * exports so that downloaded files cannot leak them.
+ * Webhook signing secrets and custom webhook header values are credentials;
+ * they are excluded from exports so that downloaded files cannot leak them.
  */
-const EXCLUDED_FIELDS = ['webhook_secret', 'webhookSecret'];
+const EXCLUDED_FIELDS = [
+  'webhook_secret',
+  'webhookSecret',
+  'webhook_headers',
+  'webhookHeaders',
+]
 
 /**
  * Escape a single CSV cell value.
@@ -73,19 +78,17 @@ export function buildCSVFromRecords(
   records: Record<string, unknown>[],
   delimiter = ','
 ): string {
-  const headers: string[] = [];
+  const headers: string[] = []
 
   for (const record of records) {
     for (const key of Object.keys(record)) {
       if (!EXCLUDED_FIELDS.includes(key) && !headers.includes(key)) {
-        headers.push(key);
+        headers.push(key)
       }
     }
   }
 
-  const rows = records.map((record) =>
-    headers.map((header) => record[header])
-  );
+  const rows = records.map((record) => headers.map((header) => record[header]))
 
-  return buildCSV(headers, rows, delimiter);
+  return buildCSV(headers, rows, delimiter)
 }

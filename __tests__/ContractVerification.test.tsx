@@ -1,6 +1,9 @@
 import { vi } from 'vitest'
+import { useState } from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import ContractVerification, { type VerificationStatus } from '@/components/ContractVerification'
+import ContractVerification, {
+  type CheckState,
+} from '@/components/ContractVerification'
 
 global.fetch = vi.fn()
 
@@ -37,7 +40,9 @@ describe('ContractVerification', () => {
     render(<ContractVerification network="testnet" contractId={CONTRACT_ID} />)
     await vi.advanceTimersByTimeAsync(600)
 
-    expect(screen.getByText('Checking deployment on testnet…')).toBeInTheDocument()
+    expect(
+      screen.getByText('Checking deployment on testnet…')
+    ).toBeInTheDocument()
   })
 
   it('confirms a contract that exists on the network', async () => {
@@ -46,7 +51,9 @@ describe('ContractVerification', () => {
     render(<ContractVerification network="testnet" contractId={CONTRACT_ID} />)
     await vi.advanceTimersByTimeAsync(600)
 
-    await waitFor(() => expect(screen.getByText('Contract found on testnet.')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('Contract found on testnet.')).toBeInTheDocument()
+    )
   })
 
   it('warns with an override when the contract is not on the network', async () => {
@@ -66,7 +73,9 @@ describe('ContractVerification', () => {
     await vi.advanceTimersByTimeAsync(600)
 
     await waitFor(() =>
-      expect(screen.getByText(/Contract not found on mainnet/)).toBeInTheDocument()
+      expect(
+        screen.getByText(/Contract not found on mainnet/)
+      ).toBeInTheDocument()
     )
     expect(onStatusChange).toHaveBeenLastCalledWith('not_found')
 
@@ -91,7 +100,9 @@ describe('ContractVerification', () => {
     await vi.advanceTimersByTimeAsync(600)
 
     await waitFor(() =>
-      expect(screen.getByText(/Contract not found on mainnet/)).toBeInTheDocument()
+      expect(
+        screen.getByText(/Contract not found on mainnet/)
+      ).toBeInTheDocument()
     )
 
     const override = screen.getByRole('checkbox')
@@ -113,7 +124,9 @@ describe('ContractVerification', () => {
     )
     await vi.advanceTimersByTimeAsync(600)
 
-    await waitFor(() => expect(onStatusChange).toHaveBeenLastCalledWith('found'))
+    await waitFor(() =>
+      expect(onStatusChange).toHaveBeenLastCalledWith('found')
+    )
   })
 
   it('does not block the form when the RPC is unreachable', async () => {
@@ -130,7 +143,9 @@ describe('ContractVerification', () => {
     await vi.advanceTimersByTimeAsync(600)
 
     await waitFor(() =>
-      expect(screen.getByText(/Could not verify the deployment on testnet/)).toBeInTheDocument()
+      expect(
+        screen.getByText(/Could not verify the deployment on testnet/)
+      ).toBeInTheDocument()
     )
     expect(screen.getByText(/Saving is not blocked/)).toBeInTheDocument()
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
@@ -139,16 +154,73 @@ describe('ContractVerification', () => {
 
   it('re-checks when the network changes', async () => {
     mockRpc({ jsonrpc: '2.0', id: 1, result: { entries: [{}] } })
-    const { rerender } = render(<ContractVerification network="testnet" contractId={CONTRACT_ID} />)
+    const { rerender } = render(
+      <ContractVerification network="testnet" contractId={CONTRACT_ID} />
+    )
     await vi.advanceTimersByTimeAsync(600)
-    await waitFor(() => expect(screen.getByText('Contract found on testnet.')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('Contract found on testnet.')).toBeInTheDocument()
+    )
 
     mockRpc({ jsonrpc: '2.0', id: 1, result: { entries: [] } })
-    rerender(<ContractVerification network="futurenet" contractId={CONTRACT_ID} />)
+    rerender(
+      <ContractVerification network="futurenet" contractId={CONTRACT_ID} />
+    )
     await vi.advanceTimersByTimeAsync(600)
 
     await waitFor(() =>
-      expect(screen.getByText(/Contract not found on futurenet/)).toBeInTheDocument()
+      expect(
+        screen.getByText(/Contract not found on futurenet/)
+      ).toBeInTheDocument()
     )
+  })
+})
+
+function ControlledVerification({ contractId }: { contractId: string }) {
+  const [status, setStatus] = useState<CheckState>('idle')
+  const [reason, setReason] = useState<string | null>(null)
+  const [overridden, setOverridden] = useState(false)
+  return (
+    <ContractVerification
+      network="testnet"
+      contractId={contractId}
+      status={status}
+      reason={reason}
+      overridden={overridden}
+      onOverrideChange={setOverridden}
+      onStatusChange={(s, r) => {
+        setStatus(s)
+        setReason(r ?? null)
+      }}
+    />
+  )
+}
+
+describe('ContractVerification retry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('re-runs the check when "Retry check" is clicked after the RPC was unavailable', async () => {
+    fetchMock().mockRejectedValueOnce(new Error('fetch failed'))
+    render(<ControlledVerification contractId={CONTRACT_ID} />)
+    await vi.advanceTimersByTimeAsync(600)
+
+    const retry = await screen.findByRole('button', { name: 'Retry check' })
+    expect(fetchMock()).toHaveBeenCalledTimes(1)
+
+    mockRpc({ jsonrpc: '2.0', id: 1, result: { entries: [{}] } })
+    fireEvent.click(retry)
+    await vi.advanceTimersByTimeAsync(600)
+
+    await waitFor(() =>
+      expect(screen.getByText(/Contract found on testnet/)).toBeInTheDocument()
+    )
+    expect(fetchMock()).toHaveBeenCalledTimes(2)
   })
 })

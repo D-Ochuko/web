@@ -560,6 +560,70 @@ describe('storage write failures', () => {
 })
 /* … truncated 1606 chars — edit only what you need near the top … */
 
+describe('webhook secret rotation (Issue #403)', () => {
+  const DAY = 24 * 60 * 60 * 1000
+
+  it('moves the old secret into webhook_secret_previous with a ~24h expiry on rotation', async () => {
+    const s = await import('../storage')
+    const before = Date.now()
+    saveContract({ ...contract1, webhook_secret: 'old-secret' })
+    s.rotateWebhookSecret('c1', 'new-secret')
+    const after = Date.now()
+    const stored = getContracts()[0]
+    expect(stored.webhook_secret).toBe('new-secret')
+    expect(stored.webhook_secret_previous).toBe('old-secret')
+    expect(stored.webhook_secret_previous_expires_at).toBeGreaterThanOrEqual(
+      before + DAY
+    )
+    expect(stored.webhook_secret_previous_expires_at).toBeLessThanOrEqual(
+      after + DAY
+    )
+  })
+
+  it('preserves both secret fields through getContracts', async () => {
+    const s = await import('../storage')
+    saveContract({ ...contract1, webhook_secret: 'old-secret' })
+    s.rotateWebhookSecret('c1', 'new-secret')
+    const stored = getContracts()[0]
+    expect(stored.webhook_secret).toBe('new-secret')
+    expect(stored.webhook_secret_previous).toBe('old-secret')
+    expect(typeof stored.webhook_secret_previous_expires_at).toBe('number')
+  })
+
+  it('treats an expired previous secret as absent', async () => {
+    const s = await import('../storage')
+    saveContract({
+      ...contract1,
+      webhook_secret: 'new-secret',
+      webhook_secret_previous: 'old-secret',
+      webhook_secret_previous_expires_at: Date.now() - 1000,
+    })
+    expect(s.getActiveWebhookSecrets('c1')).toEqual(['new-secret'])
+  })
+
+  it('returns both secrets during the grace period', async () => {
+    const s = await import('../storage')
+    saveContract({ ...contract1, webhook_secret: 'old-secret' })
+    s.rotateWebhookSecret('c1', 'new-secret')
+    expect(s.getActiveWebhookSecrets('c1')).toEqual([
+      'new-secret',
+      'old-secret',
+    ])
+  })
+
+  it('finish-rotation clears the previous secret and expiry', async () => {
+    const s = await import('../storage')
+    saveContract({ ...contract1, webhook_secret: 'old-secret' })
+    s.rotateWebhookSecret('c1', 'new-secret')
+    s.finishWebhookSecretRotation('c1')
+    const stored = getContracts()[0]
+    expect(stored.webhook_secret).toBe('new-secret')
+    expect(stored.webhook_secret_previous).toBeUndefined()
+    expect(stored.webhook_secret_previous_expires_at).toBeUndefined()
+    expect(s.getActiveWebhookSecrets('c1')).toEqual(['new-secret'])
+  })
+})
+
 describe('deleteAlertsByNetwork (Issue #203)', () => {
   beforeEach(() => {
     localStorage.clear()

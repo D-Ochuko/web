@@ -1,0 +1,34 @@
+[
+  {
+    "id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4:testnet",
+    "label": "Aquarius Pool",
+    "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+    "network": "testnet",
+    "rules": [
+      { "type": "LargeTransfer", "threshold_xlm": 1000 },
+      { "type": "FunctionCalled", "function_name": "swap" },
+      {
+        "type": "AdminFunctionCalled",
+        "function_names": ["set_admin"],
+        "enabled": true
+      },
+      { "type": "AnyTransaction" },
+      { "type": "TransactionFailed", "enabled": false }
+    ],
+    "webhook_url": "https://hooks.example.com/txwatch",
+    "webhook_secret": "whsec_example_value",
+    "enabled": true,
+    "created_at": 1700000000000,
+    "updated_at": 1700000500000
+  },
+  {
+    "id": "CBGDY5RGPLNGY5XZFDNZ5XWDGXHZWD4P6YQ5GXHZWD4P6YQ5GXH:testnet",
+    "label": "Payment Tracker",
+    "contract_id": "CBGDY5RGPLNGY5XZFDNZ5XWDGXHZWD4P6YQ5GXHZWD4P6YQ5GXH",
+    "network": "mainnet",
+    "rules": [{ "type": "LargeTransfer", "threshold_xlm": 5000 }],
+    "webhook_url": "https://hooks.example.com/payments",
+    "created_at": 1700000600000,
+    "updated_at": 1700000600000
+  }
+]
