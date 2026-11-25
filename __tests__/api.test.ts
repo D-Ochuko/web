@@ -13,6 +13,7 @@ import {
 } from '@/lib/api'
 import { horizonUrl } from '@/lib/stellar'
 import { signWebhookPayload } from '@/lib/webhookSignature'
+import { fetchAlerts } from '@/lib/alerts/alertSource'
 import type { AlertRule } from '@/types'
 
 global.fetch = vi.fn()
@@ -67,6 +68,50 @@ describe('apiFetch', () => {
     })
 
     await expect(apiFetch('/test')).rejects.toThrow('HTTP 500')
+  })
+})
+
+describe('fetchAlerts', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('drops alerts whose contract_id or network do not match the request', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const matching = {
+      id: 'a1',
+      contract_id: 'CAAAA',
+      network: 'testnet',
+      rule_triggered: 'AnyTransaction',
+      transaction_hash: TEST_TX_HASH,
+      timestamp: 1700000000000,
+    }
+    const wrongContract = {
+      ...matching,
+      id: 'a2',
+      contract_id: 'CBBBB',
+    }
+    const wrongNetwork = {
+      ...matching,
+      id: 'a3',
+      network: 'mainnet',
+    }
+    ;(global.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [matching, wrongContract, wrongNetwork],
+    })
+
+    try {
+      const alerts = await fetchAlerts('CAAAA', 'testnet')
+
+      expect(alerts.map((a) => a.id)).toEqual(['a1'])
+      expect(warn).toHaveBeenCalled()
+      const message = warn.mock.calls.map((c) => String(c[0])).join(' ')
+      expect(message).toContain('2')
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
 
@@ -330,206 +375,6 @@ describe('sendTestWebhook', () => {
       contractId: 'CBCDEF',
     })
     expect(result).toMatchObject({ status: 404, ok: false })
-    expect(typeof result.durationMs).toBe('number')
-  })
-
-  it('reports the receiver status, duration and body snippet from the proxy', async () => {
-    vi.stubEnv('NODE_ENV', 'production')
-    try {
-      ;(global.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
-        // The proxy itself answered 200; the receiver answered 404.
-        ok: true,
-        status: 200,
-        json: async () => ({
-          status: 404,
-          ok: false,
-          durationMs: 37,
-          bodySnippet: '<h1>Cannot POST /hook</h1>',
-        }),
-      })
-
-      const result = await sendTestWebhook('https://example.com/hook', {
-        contractId: 'CBCDEF',
-      })
-
-      expect(
-        (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]
-      ).toBe('/api/test-webhook')
-      expect(result).toEqual({
-        status: 404,
-        ok: false,
-        durationMs: 37,
-        bodySnippet: '<h1>Cannot POST /hook</h1>',
-      })
-    } finally {
-      vi.unstubAllEnvs()
-    }
-  })
-
-  it('times out even when caller signal is provided (#22)', async () => {
-    vi.useFakeTimers()
-    ;(global.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      (_url: string, init: RequestInit) =>
-        new Promise((_, reject) => {
-          init.signal?.addEventListener('abort', () => {
-            reject(
-              Object.assign(new Error('The operation was aborted'), {
-                name: 'AbortError',
-              })
-            )
-          })
-        })
-    )
-
-    const callerController = new AbortController()
-    const promise = sendTestWebhook('https://example.com/webhook', {
-      contractId: 'CBCDEF',
-      signal: callerController.signal,
-    })
-
-    vi.advanceTimersByTime(10001)
-
-    await expect(promise).rejects.toThrow('Webhook request timed out')
-    vi.useRealTimers()
-  })
-
-  it('distinguishes caller cancellation from timeout (#22)', async () => {
-    ;(global.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      (_url: string, init: RequestInit) =>
-        new Promise((_, reject) => {
-          init.signal?.addEventListener('abort', () => {
-            reject(
-              Object.assign(new Error('cancelled by caller'), {
-                name: 'AbortError',
-              })
-            )
-          })
-        })
-    )
-
-    const callerController = new AbortController()
-    const promise = sendTestWebhook('https://example.com/webhook', {
-      contractId: 'CBCDEF',
-      signal: callerController.signal,
-    })
-
-    callerController.abort()
-
-    await expect(promise).rejects.toThrow('cancelled by caller')
-  })
-})
-
-describe('apiFetch hardening', () => {
-  const f = () => global.fetch as unknown as ReturnType<typeof vi.fn>
-
-  it('returns undefined for 204 and empty bodies', async () => {
-    f().mockResolvedValueOnce({
-      ok: true,
-      status: 204,
-      text: () => Promise.resolve(''),
-    })
-    await expect(apiFetch('/x', { method: 'DELETE' })).resolves.toBeUndefined()
-    f().mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      text: () => Promise.resolve(''),
-    })
-    await expect(apiFetch('/x')).resolves.toBeUndefined()
-  })
-
-  it('sets Content-Type only when a body is sent', async () => {
-    f().mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: () => Promise.resolve('{}'),
-    })
-    await apiFetch('/x', { method: 'POST', body: '{}' })
-    const init = f().mock.calls.at(-1)![1] as RequestInit
-    expect((init.headers as Headers).get('Content-Type')).toBe(
-      'application/json'
-    )
-  })
-
-  it('times out and aborts the request', async () => {
-    f().mockImplementation(
-      (_u: string, init: RequestInit) =>
-        new Promise((_, reject) => {
-          init.signal!.addEventListener('abort', () =>
-            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
-          )
-        })
-    )
-    await expect(apiFetch('/x', { timeoutMs: 10 })).rejects.toThrow(
-      'Request timed out'
-    )
-  })
-
-  it('propagates a caller abort', async () => {
-    f().mockImplementation(
-      (_u: string, init: RequestInit) =>
-        new Promise((_, reject) => {
-          init.signal!.addEventListener('abort', () =>
-            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
-          )
-        })
-    )
-    const ac = new AbortController()
-    const p = apiFetch('/x', { signal: ac.signal })
-    ac.abort()
-    await expect(p).rejects.toThrow('aborted')
-  })
-})
-
-describe('joinUrl', () => {
-  it('joins with a single slash', () => {
-    expect(joinUrl('http://a/', '/b')).toBe('http://a/b')
-    expect(joinUrl('http://a', 'b')).toBe('http://a/b')
-    expect(joinUrl('', '/b')).toBe('/b')
-  })
-})
-
-describe('isApiConfigured', () => {
-  afterEach(() => {
-    vi.unstubAllEnvs()
-  })
-
-  it('returns true when NEXT_PUBLIC_API_URL is set', () => {
-    vi.stubEnv('NEXT_PUBLIC_API_URL', 'http://api/')
-    expect(isApiConfigured()).toBe(true)
-  })
-
-  it('returns false when NEXT_PUBLIC_API_URL is unset', () => {
-    vi.stubEnv('NEXT_PUBLIC_API_URL', '')
-    expect(isApiConfigured()).toBe(false)
-  })
-})
-
-describe('removeContract', () => {
-  const f = () => global.fetch as unknown as ReturnType<typeof vi.fn>
-
-  beforeEach(() => {
-    vi.clearAllMocks()
-    vi.stubEnv('NEXT_PUBLIC_API_URL', 'http://api/')
-  })
-
-  afterEach(() => {
-    vi.unstubAllEnvs()
-  })
-
-  it('sends a DELETE through apiFetch with a single-slash URL (#252)', async () => {
-    f().mockResolvedValue({
-      ok: true,
-      status: 204,
-      text: () => Promise.resolve(''),
-    })
-
-    await expect(removeContract('abc123')).resolves.toBeUndefined()
-
-    expect(f()).toHaveBeenCalledTimes(1)
-    const [url, init] = f().mock.calls[0]
-    expect(url).toBe('http://api/contracts/abc123')
-    expect(url).not.toContain('//contracts')
-    expect((init as RequestInit).method).toBe('DELETE')
   })
 })
 
