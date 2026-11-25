@@ -60,6 +60,32 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: ''
 
+      # Reports the size of the client JavaScript emitted by `next build` and
+      # fails when it grows past the budget, so a bundle size regression shows
+      # up in the PR instead of in production load times. Raise
+      # BUNDLE_BUDGET_KB deliberately when a larger bundle is intended.
+      - name: Check bundle size
+        env:
+          BUNDLE_BUDGET_KB: '5120'
+        run: |
+          total_bytes=$(find .next/static -type f -name '*.js' -print0 | xargs -0 cat | wc -c)
+          total_kb=$((total_bytes / 1024))
+          {
+            echo '## Client bundle size'
+            echo
+            echo "- Total client JS: ${total_kb} KB (budget ${BUNDLE_BUDGET_KB} KB)"
+            echo
+            echo '| File | Size (KB) |'
+            echo '| --- | ---: |'
+            find .next/static -type f -name '*.js' -printf '%s %p
+' | sort -rn | head -10 | awk '{printf "| %s | %d |
+", $2, $1 / 1024}'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$total_kb" -gt "$BUNDLE_BUDGET_KB" ]; then
+            echo "::error::Client bundle is ${total_kb} KB, over the ${BUNDLE_BUDGET_KB} KB budget"
+            exit 1
+          fi
+
       - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v4

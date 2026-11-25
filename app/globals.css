@@ -37,6 +37,36 @@ body {
 }
 
 /*
+ * #536: light theme. Components use fixed zinc utility classes, so the light
+ * palette remaps those utilities under `html.light` instead of requiring a
+ * `dark:` variant on every element. The default (dark) look is unchanged.
+ */
+html.light {
+  --background: 0 0% 98%;
+  --foreground: 240 10% 4%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 10% 4%;
+  --border: 240 6% 90%;
+  --input: 240 6% 90%;
+  --muted: 240 5% 92%;
+  --muted-foreground: 240 4% 40%;
+  color-scheme: light;
+}
+
+html.light .bg-zinc-950 { background-color: #fafafa; }
+html.light .bg-zinc-950\/80 { background-color: rgb(250 250 250 / 0.8); }
+html.light .bg-zinc-900 { background-color: #ffffff; }
+html.light .bg-zinc-900\/50 { background-color: rgb(255 255 255 / 0.5); }
+html.light .bg-zinc-800 { background-color: #f4f4f5; }
+html.light .border-zinc-800 { border-color: #e4e4e7; }
+html.light .border-zinc-700 { border-color: #d4d4d8; }
+html.light .text-zinc-100 { color: #18181b; }
+html.light .text-zinc-200 { color: #27272a; }
+html.light .text-zinc-300 { color: #3f3f46; }
+html.light .text-zinc-400 { color: #52525b; }
+html.light .text-zinc-500 { color: #71717a; }
+html.light .hover\:text-zinc-100:hover { color: #18181b; }
+html.light .hover\:text-zinc-300:hover { color: #3f3f46; }
  * #537: many inputs set `focus:outline-none`, which removes the browser focus
  * indicator. This restores one consistent, visible keyboard-focus ring for
  * every interactive element (WCAG 2.2 AA 2.4.7 / 2.4.11). It only applies to
