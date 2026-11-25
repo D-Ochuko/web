@@ -21,7 +21,7 @@ import {
   networkMismatchWarning,
   readFreighterConnection,
 } from '@/lib/freighter'
-import { formatDate, formatRelativeTime, formatRuleSummary } from '@/lib/format'
+import { formatDate, formatRelativeTime, formatRuleAccessibleName, formatRuleSummary } from '@/lib/format'
 import { useAnalytics } from '@/lib/useAnalytics'
 import { useNow } from '@/hooks/useNow'
 import { useToast } from '@/components/ToastProvider'
@@ -680,7 +680,7 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
                   type="button"
                   role="switch"
                   aria-checked={isRuleEnabled(rule)}
-                  aria-label={isRuleEnabled(rule) ? 'Disable rule' : 'Enable rule'}
+                  aria-label={`${isRuleEnabled(rule) ? 'Disable' : 'Enable'} ${formatRuleAccessibleName(rule)}`}
                   onClick={() => toggleRule(i)}
                   className="text-xs text-zinc-400 hover:text-zinc-100"
                 >

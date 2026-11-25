@@ -2,7 +2,7 @@
 
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from 'react'
 import { AlertRule, AlertRuleType, isRuleEnabled } from '@/types'
-import { formatRuleSummary } from '@/lib/format'
+import { formatRuleAccessibleName, formatRuleSummary } from '@/lib/format'
 import { MAX_XLM_DECIMALS, validateThreshold } from '@/lib/formatAmount'
 import { getRuleMeta } from '@/lib/ruleMeta'
 import { isValidFunctionName, sanitizeAdminFunctionNames } from '@/lib/soroban'
@@ -532,7 +532,7 @@ export default function RuleBuilder({
                     type="button"
                     role="switch"
                     aria-checked={enabled}
-                    aria-label={enabled ? 'Disable rule' : 'Enable rule'}
+                    aria-label={`${enabled ? 'Disable' : 'Enable'} ${formatRuleAccessibleName(rule)}`}
                     onClick={() => toggleRule(index)}
                     className="text-xs text-zinc-400 hover:text-zinc-100 transition-colors"
                   >
@@ -540,6 +540,7 @@ export default function RuleBuilder({
                   </button>
                   <button
                     type="button"
+                    aria-label={`Edit ${formatRuleAccessibleName(rule)}`}
                     onClick={() => startEdit(index)}
                     className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
                   >
@@ -547,6 +548,7 @@ export default function RuleBuilder({
                   </button>
                   <button
                     type="button"
+                    aria-label={`Remove ${formatRuleAccessibleName(rule)}`}
                     onClick={() => removeRule(index)}
                     className="text-xs text-red-400 hover:text-red-300 transition-colors"
                   >

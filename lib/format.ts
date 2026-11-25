@@ -1,4 +1,5 @@
 import { AlertRule } from '@/types'
+import { getRuleMeta } from '@/lib/ruleMeta'
 
 /**
  * Shared formatting helpers for dates used across the app.
@@ -128,4 +129,9 @@ export function formatRuleSummary(rule: AlertRule): string {
     case 'TransactionFailed':
       return ''
   }
+}
+
+/** Rule label plus summary (e.g. "Large Transfer > 10,000 XLM") for unique accessible names. */
+export function formatRuleAccessibleName(rule: AlertRule): string {
+  return `${getRuleMeta(rule.type).label} ${formatRuleSummary(rule)}`.trim()
 }

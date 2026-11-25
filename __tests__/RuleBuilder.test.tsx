@@ -494,3 +494,20 @@ describe('RuleBuilder rule description', () => {
     expect(screen.getAllByText(description)).toHaveLength(1)
   })
 })
+
+describe('RuleBuilder per-rule accessible names', () => {
+  it('includes the rule summary in each rule button name', () => {
+    render(
+      <RuleBuilder
+        rules={[
+          { type: 'LargeTransfer', threshold_xlm: 10000 },
+          { type: 'FunctionCalled', function_name: 'mint' },
+        ]}
+        onChange={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Remove Large Transfer > 10,000 XLM' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Edit Function Called mint' })).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: 'Disable Large Transfer > 10,000 XLM' })).toBeInTheDocument()
+  })
+})
