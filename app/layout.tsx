@@ -7,6 +7,7 @@ import MobileNav from '@/components/MobileNav'
 import NavLink from '@/components/NavLink'
 import AlertPruner from '@/components/AlertPruner'
 import StorageBootstrap from '@/components/StorageBootstrap'
+import ThemeToggle from '@/components/ThemeToggle'
 import NotificationNavigationRegistrar from '@/components/NotificationNavigationRegistrar'
 import AuthRequiredPrompt from '@/components/AuthRequiredPrompt'
 import SyncRetryRunner from '@/components/SyncRetryRunner'
@@ -20,6 +21,13 @@ export const metadata: Metadata = {
     template: '%s — TxWatch',
   },
   description: 'Real-time monitoring and alerts for Soroban smart contracts',
+  openGraph: {
+    type: 'website',
+    siteName: 'TxWatch',
+    title: 'TxWatch — Soroban Contract Monitoring',
+    description: 'Real-time monitoring and alerts for Soroban smart contracts',
+  },
+  robots: { index: true, follow: true },
 }
 
 export const viewport: Viewport = {
@@ -73,6 +81,7 @@ export default function RootLayout({
               </nav>
 
               <div className="hidden sm:flex items-center gap-3">
+                <ThemeToggle />
                 <WalletStatusBadge />
                 <FreighterConnect />
               </div>

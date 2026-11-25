@@ -1,5 +1,7 @@
 import type { AlertPayload } from '@/types'
 import { NOTIFICATIONS_KEY } from '@/lib/storageKeys'
+import { getRuleMeta } from '@/lib/rules'
+import { formatAmount } from '@/lib/format'
 
 export const NOTIFY_THROTTLE_MS = 10000
 
@@ -84,18 +86,40 @@ export async function acquireBackgroundPollLeader(): Promise<boolean> {
   }
 }
 
+function ruleLabel(ruleType: string): string {
+  try {
+    return getRuleMeta(ruleType).label
+  } catch {
+    return ruleType
+  }
+}
+
+function describeAlert(alert: AlertPayload): string {
+  const parts: string[] = [ruleLabel(alert.rule_triggered)]
+  if (alert.amount !== undefined && alert.amount !== null) {
+    parts.push(formatAmount(alert.amount))
+  }
+  if (alert.function_name) {
+    parts.push(alert.function_name)
+  }
+  return parts.join(' · ')
+}
+
 function showNotification(
   alerts: AlertPayload[],
   contractLabel: string,
-  contractPath: string
+  contractPath: string,
+  network?: string
 ): void {
+  const isMainnet = !network || network === 'mainnet'
+  const networkPrefix = isMainnet ? '' : `[${network}] `
   const title =
     alerts.length === 1
-      ? `New alert: ${contractLabel}`
-      : `${alerts.length} new alerts: ${contractLabel}`
+      ? `${networkPrefix}New alert: ${contractLabel}`
+      : `${networkPrefix}${alerts.length} new alerts: ${contractLabel}`
   const body =
     alerts.length === 1
-      ? `${alerts[0].rule_triggered} (${alerts[0].transaction_hash.slice(0, 12)}...)`
+      ? describeAlert(alerts[0])
       : `${alerts.length} transactions matched your rules`
   const n = new Notification(title, { body, tag: `txwatch:${contractPath}` })
   n.onclick = () => {
@@ -117,7 +141,7 @@ function flushQueuedAlerts(contractPath: string): void {
 
   const queued = state.queuedAlerts
   state.queuedAlerts = []
-  state.lastNotifiedAt += NOTIFY_THROTTLE_MS
+  state.lastNotifiedAt = Date.now()
   showNotification(queued, state.contractLabel, state.contractPath)
 }
 
@@ -126,7 +150,8 @@ export function notifyNewAlerts(
   alerts: AlertPayload[],
   contractLabel: string,
   contractPath: string,
-  now: number = Date.now()
+  now: number = Date.now(),
+  network?: string
 ): boolean {
   if (alerts.length === 0 || !notificationsEnabled()) return false
 
@@ -134,7 +159,12 @@ export function notifyNewAlerts(
   if (!state || now - state.lastNotifiedAt >= NOTIFY_THROTTLE_MS) {
     const queuedAlerts = state?.queuedAlerts ?? []
     if (state?.timer) clearTimeout(state.timer)
-    showNotification([...queuedAlerts, ...alerts], contractLabel, contractPath)
+    showNotification(
+      [...queuedAlerts, ...alerts],
+      contractLabel,
+      contractPath,
+      network
+    )
     notificationStateByContract.set(contractPath, {
       lastNotifiedAt: now,
       queuedAlerts: [],

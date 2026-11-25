@@ -1,12 +1,18 @@
 'use client'
 
-import { AlertPayload, AlertRuleType, Network, isAlertRuleType } from '@/types'
+import {
+  AlertPayload,
+  AlertRuleType,
+  Network,
+  isAlertRuleType,
+  parseDeliveryStatus,
+} from '@/types'
 import { explorerTxUrl, truncateId } from '@/lib/stellar'
 import EmptyState from './EmptyState'
 import CopyButton from '@/components/CopyButton'
 import { formatDateTime, formatRelativeTime } from '@/lib/format'
 import { formatAmount } from '@/lib/formatAmount'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import AlertRuleBadge from './AlertRuleBadge'
 import Modal from './Modal'
@@ -58,14 +64,18 @@ export function toWebhookEntry(alert: AlertPayload): WebhookEntry {
     timestamp: new Date(alert.timestamp).toISOString(),
     event: alert.rule_triggered,
     contractAddress: alert.contract_id,
-    status: 'success',
+    status: parseDeliveryStatus(alert.delivery_status),
     amount: alert.amount?.toString(),
     txHash: alert.transaction_hash,
-    payload: alert,
+    payload: alert as unknown as Record<string, unknown>,
   }
 }
 
-export function exportCSV(alerts: AlertPayload[], contractLabel?: string, network?: string) {
+export function exportCSV(
+  alerts: AlertPayload[],
+  contractLabel?: string,
+  network?: string
+) {
   const headers = ['Time', 'Rule', 'Tx Hash', 'Function', 'Amount']
   const rows = alerts.map((a) => [
     new Date(a.timestamp).toISOString(),
@@ -91,27 +101,47 @@ export function exportCSV(alerts: AlertPayload[], contractLabel?: string, networ
 }
 
 export default function WebhookLog({ alerts, network, contractLabel }: WebhookLogProps) {
-  const [selectedFilter, setSelectedFilter] = useState<AlertRuleType | null>(null)
-export default function WebhookLog({ alerts, network }: WebhookLogProps) {
+export default function WebhookLog({
+  alerts,
+  network,
+  contractLabel,
+}: WebhookLogProps) {
   const searchParams = useSearchParams()
 
-  const [selectedFilter, setSelectedFilter] = useState<AlertRuleType | null>(() => {
-    const r = searchParams?.get('rule')
-    return r && isAlertRuleType(r) ? r : null
-  })
+  const [selectedFilter, setSelectedFilter] = useState<AlertRuleType | null>(
+    () => {
+      const r = searchParams?.get('rule')
+      return r && isAlertRuleType(r) ? r : null
+    }
+  )
   const [selectedAlert, setSelectedAlert] = useState<AlertPayload | null>(null)
+  const [showTestDeliveries, setShowTestDeliveries] = useState<boolean>(
+    () => searchParams?.get('test') === '1'
+  )
 
-  // Refresh relative time labels every minute from the shared clock
-  useNow(60_000)
+  // Refresh relative time labels and time-range boundaries every minute from the shared clock
+  const now = useNow(60_000)
 
-  const [searchInput, setSearchInput] = useState(() => searchParams?.get('q') ?? '')
-  const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams?.get('q') ?? '')
+  const [searchInput, setSearchInput] = useState(
+    () => searchParams?.get('q') ?? ''
+  )
+  const [debouncedSearch, setDebouncedSearch] = useState(
+    () => searchParams?.get('q') ?? ''
+  )
 
   const [range, setRange] = useState<DateRange>(() => {
     const r = searchParams?.get('range')
-    return (r === 'all' || r === '24h' || r === '7d' || r === '30d' || r === 'custom') ? r : 'all'
+    return r === 'all' ||
+      r === '24h' ||
+      r === '7d' ||
+      r === '30d' ||
+      r === 'custom'
+      ? r
+      : 'all'
   })
-  const [customFrom, setCustomFrom] = useState(() => searchParams?.get('from') ?? '')
+  const [customFrom, setCustomFrom] = useState(
+    () => searchParams?.get('from') ?? ''
+  )
   const [customTo, setCustomTo] = useState(() => searchParams?.get('to') ?? '')
   const [pageSize, setPageSize] = useState<number>(PAGE_SIZES[0])
 
@@ -153,9 +183,10 @@ export default function WebhookLog({ alerts, network }: WebhookLogProps) {
       if (customTo) to = new Date(`${customTo}T23:59:59.999`).getTime()
     } else if (range !== 'all') {
       const days = range === '24h' ? 1 : range === '7d' ? 7 : 30
-      from = Date.now() - days * DAY_MS
+      from = now - days * DAY_MS
     }
     return alerts.filter((a) => {
+      if (!showTestDeliveries && a.is_test) return false
       if (selectedFilter && a.rule_triggered !== selectedFilter) return false
       if (a.timestamp < from || a.timestamp > to) return false
       if (
@@ -167,24 +198,58 @@ export default function WebhookLog({ alerts, network }: WebhookLogProps) {
       }
       return true
     })
-  }, [alerts, selectedFilter, debouncedSearch, range, customFrom, customTo, isInvertedRange])
+  }, [alerts, selectedFilter, debouncedSearch, range, customFrom, customTo, isInvertedRange, showTestDeliveries])
+  }, [
+    alerts,
+    selectedFilter,
+    debouncedSearch,
+    range,
+    customFrom,
+    customTo,
+    isInvertedRange,
+    now,
+  ])
 
-  const initialSort = (searchParams?.get('sort') === 'asc' ? 'asc' : 'desc') as 'asc' | 'desc'
-  const { sortedEntries, sortDirection, toggleSort } = useSortedLog(filteredAlerts, initialSort)
+  const initialSort = (searchParams?.get('sort') === 'asc' ? 'asc' : 'desc') as
+    'asc' | 'desc'
+  const { sortedEntries, sortDirection, toggleSort } = useSortedLog(
+    filteredAlerts,
+    initialSort
+  )
 
   const pageCount = Math.max(1, Math.ceil(sortedEntries.length / pageSize))
   const currentPage = Math.min(page, pageCount - 1)
   const pageStart = Math.max(0, currentPage * pageSize)
   const pageAlerts = sortedEntries.slice(pageStart, pageStart + pageSize)
 
+  // Skip the reset on mount so ?page= deep links are honored (#449)
+  const didMountRef = useRef(false)
   useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true
+      return
+    }
     setPage(0)
-  }, [selectedFilter, debouncedSearch, range, customFrom, customTo, pageSize, sortDirection])
+  }, [selectedFilter, debouncedSearch, range, customFrom, customTo, pageSize, sortDirection, showTestDeliveries])
+  }, [
+    selectedFilter,
+    debouncedSearch,
+    range,
+    customFrom,
+    customTo,
+    pageSize,
+    sortDirection,
+  ])
 
   // Mirror filters into URL search params
   useEffect(() => {
-    const params = new URLSearchParams()
+    if (typeof window === 'undefined') return
+    // Start from the live URL so unrelated params, the hash and history.state survive.
+    const params = new URLSearchParams(window.location.search)
+    for (const key of ['rule', 'q', 'range', 'from', 'to', 'sort', 'page'])
+      params.delete(key)
     if (selectedFilter) params.set('rule', selectedFilter)
+    if (showTestDeliveries) params.set('test', '1')
     if (debouncedSearch.trim()) params.set('q', debouncedSearch.trim())
     if (range !== 'all') params.set('range', range)
     if (range === 'custom' && customFrom) params.set('from', customFrom)
@@ -194,10 +259,24 @@ export default function WebhookLog({ alerts, network }: WebhookLogProps) {
 
     const qs = params.toString()
     if (typeof window !== 'undefined') {
-      const newUrl = qs ? `${window.location.pathname}?${qs}` : window.location.pathname
+      const newUrl = qs
+        ? `${window.location.pathname}?${qs}`
+        : window.location.pathname
       window.history.replaceState(null, '', newUrl)
     }
-  }, [selectedFilter, debouncedSearch, range, customFrom, customTo, sortDirection, currentPage])
+  }, [selectedFilter, debouncedSearch, range, customFrom, customTo, sortDirection, currentPage, showTestDeliveries])
+    const { pathname, hash } = window.location
+    const newUrl = `${qs ? `${pathname}?${qs}` : pathname}${hash}`
+    window.history.replaceState(window.history.state, '', newUrl)
+  }, [
+    selectedFilter,
+    debouncedSearch,
+    range,
+    customFrom,
+    customTo,
+    sortDirection,
+    currentPage,
+  ])
 
   if (alerts.length === 0) {
     return (
@@ -235,6 +314,17 @@ export default function WebhookLog({ alerts, network }: WebhookLogProps) {
             {RULE_META[type]?.label ?? type} ({ruleCounts.get(type)})
           </button>
         ))}
+        <button
+          onClick={() => setShowTestDeliveries((v) => !v)}
+          aria-pressed={showTestDeliveries}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            showTestDeliveries
+              ? 'bg-amber-600 text-white'
+              : 'border border-zinc-700 text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          {showTestDeliveries ? 'Hide test deliveries' : 'Show test deliveries'}
+        </button>
       </div>
 
       {/* Search and Date Range */}
@@ -247,7 +337,11 @@ export default function WebhookLog({ alerts, network }: WebhookLogProps) {
           aria-label="Search alerts by transaction hash or function"
           className="flex-1 min-w-[12rem] rounded-lg border border-zinc-700 bg-transparent px-3 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-indigo-500"
         />
-        <div className="flex flex-wrap gap-1" role="group" aria-label="Date range">
+        <div
+          className="flex flex-wrap gap-1"
+          role="group"
+          aria-label="Date range"
+        >
           {rangePresets.map((preset) => (
             <button
               key={preset.value}
@@ -310,7 +404,9 @@ export default function WebhookLog({ alerts, network }: WebhookLogProps) {
           </div>
         </div>
         {filteredAlerts.length === 0 ? (
-          <p className="text-sm text-zinc-500 py-4">No alerts match the selected filters.</p>
+          <p className="text-sm text-zinc-500 py-4">
+            No alerts match the selected filters.
+          </p>
         ) : (
           <>
             {/* Mobile card layout */}
@@ -328,12 +424,24 @@ export default function WebhookLog({ alerts, network }: WebhookLogProps) {
             <table className="hidden md:table w-full text-sm">
               <thead>
                 <tr className="border-b border-zinc-800 text-left">
-                  <th className="pb-3 pr-4 text-xs font-medium text-zinc-500 uppercase tracking-wider">Time</th>
-                  <th className="pb-3 pr-4 text-xs font-medium text-zinc-500 uppercase tracking-wider">Rule</th>
-                  <th className="pb-3 pr-4 text-xs font-medium text-zinc-500 uppercase tracking-wider">Tx Hash</th>
-                  <th className="pb-3 pr-4 text-xs font-medium text-zinc-500 uppercase tracking-wider">Function</th>
-                  <th className="pb-3 pr-4 text-xs font-medium text-zinc-500 uppercase tracking-wider">Amount</th>
-                  <th className="pb-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">Details</th>
+                  <th className="pb-3 pr-4 text-xs font-medium text-zinc-500 uppercase tracking-wider">
+                    Time
+                  </th>
+                  <th className="pb-3 pr-4 text-xs font-medium text-zinc-500 uppercase tracking-wider">
+                    Rule
+                  </th>
+                  <th className="pb-3 pr-4 text-xs font-medium text-zinc-500 uppercase tracking-wider">
+                    Tx Hash
+                  </th>
+                  <th className="pb-3 pr-4 text-xs font-medium text-zinc-500 uppercase tracking-wider">
+                    Function
+                  </th>
+                  <th className="pb-3 pr-4 text-xs font-medium text-zinc-500 uppercase tracking-wider">
+                    Amount
+                  </th>
+                  <th className="pb-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
+                    Details
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/50">
@@ -352,7 +460,17 @@ export default function WebhookLog({ alerts, network }: WebhookLogProps) {
                       </time>
                     </td>
                     <td className="py-3 pr-4">
-                      <AlertRuleBadge type={alert.rule_triggered as AlertRuleType} />
+                      <span className="inline-flex items-center gap-2">
+                        <AlertRuleBadge type={alert.rule_triggered as AlertRuleType} />
+                        {alert.is_test && (
+                          <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-400">
+                            Test
+                          </span>
+                        )}
+                      </span>
+                      <AlertRuleBadge
+                        type={alert.rule_triggered as AlertRuleType}
+                      />
                     </td>
                     <td className="py-3 pr-4">
                       <span className="inline-flex items-center gap-2">
@@ -371,10 +489,11 @@ export default function WebhookLog({ alerts, network }: WebhookLogProps) {
                     <td className="py-3 pr-4 font-mono text-zinc-400">
                       {alert.function_name ?? 'N/A'}
                     </td>
-                    <td className="py-3 text-zinc-400">
-                      {alert.amount !== undefined ? formatAmount(alert.amount) : 'N/A'}
                     <td className="py-3 pr-4 text-zinc-400">
-                      {alert.amount !== undefined ? `${formatAmount(alert.amount)} XLM` : 'N/A'}
+                      {alert.amount !== undefined
+                        ? `${formatAmount(alert.amount)} XLM`
+                        ? formatAmount(alert.amount)
+                        : 'N/A'}
                     </td>
                     <td className="py-3 text-right">
                       <button
@@ -413,7 +532,8 @@ export default function WebhookLog({ alerts, network }: WebhookLogProps) {
             </label>
             <div className="flex items-center gap-3">
               <span>
-                {pageStart + 1}–{pageStart + pageAlerts.length} of {sortedEntries.length}
+                {pageStart + 1}–{pageStart + pageAlerts.length} of{' '}
+                {sortedEntries.length}
               </span>
               <button
                 onClick={() => setPage(currentPage - 1)}

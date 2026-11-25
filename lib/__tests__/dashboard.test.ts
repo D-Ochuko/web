@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   getContracts,
   saveContract,
@@ -18,16 +18,32 @@ import { WatchedContract, AlertPayload } from '@/types'
 const store: Record<string, string> = {}
 const localStorageMock = {
   getItem: (key: string) => store[key] ?? null,
-  setItem: (key: string, value: string) => { store[key] = value },
-  removeItem: (key: string) => { delete store[key] },
-  clear: () => { Object.keys(store).forEach((k) => delete store[k]) },
-  get length() { return Object.keys(store).length },
+  setItem: (key: string, value: string) => {
+    store[key] = value
+  },
+  removeItem: (key: string) => {
+    delete store[key]
+  },
+  clear: () => {
+    Object.keys(store).forEach((k) => delete store[k])
+  },
+  get length() {
+    return Object.keys(store).length
+  },
   key: (i: number) => Object.keys(store)[i] ?? null,
 }
-Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, writable: true })
-Object.defineProperty(globalThis, 'window', { value: globalThis, writable: true })
+Object.defineProperty(globalThis, 'localStorage', {
+  value: localStorageMock,
+  writable: true,
+})
+Object.defineProperty(globalThis, 'window', {
+  value: globalThis,
+  writable: true,
+})
 
-function makeContract(overrides: Partial<WatchedContract> = {}): WatchedContract {
+function makeContract(
+  overrides: Partial<WatchedContract> = {}
+): WatchedContract {
   return {
     id: 'c1',
     label: 'Test Contract',
@@ -72,7 +88,9 @@ describe('contracts list — populated state', () => {
     saveContract(makeContract({ id: 'c2', label: 'Beta' }))
     const contracts = getContracts()
     expect(contracts).toHaveLength(2)
-    expect(contracts.map((c) => c.label)).toEqual(expect.arrayContaining(['Alpha', 'Beta']))
+    expect(contracts.map((c) => c.label)).toEqual(
+      expect.arrayContaining(['Alpha', 'Beta'])
+    )
   })
 
   it('reflects deletion', () => {
@@ -97,9 +115,13 @@ describe('contracts list — populated state', () => {
 
 describe('active webhooks filter', () => {
   it('counts contracts with a non-empty webhook_url', () => {
-    saveContract(makeContract({ id: 'c1', webhook_url: 'https://example.com/hook' }))
+    saveContract(
+      makeContract({ id: 'c1', webhook_url: 'https://example.com/hook' })
+    )
     saveContract(makeContract({ id: 'c2', webhook_url: '' }))
-    saveContract(makeContract({ id: 'c3', webhook_url: 'https://other.com/hook' }))
+    saveContract(
+      makeContract({ id: 'c3', webhook_url: 'https://other.com/hook' })
+    )
     const contracts = getContracts()
     const activeWebhooks = contracts.filter((c) => c.webhook_url).length
     expect(activeWebhooks).toBe(2)
@@ -167,7 +189,9 @@ describe('dashboard stats — alerts today', () => {
 
 describe('getAlerts — per contract filter', () => {
   it('returns empty array for contract with no alerts', () => {
-    expect(getAlerts('CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA7')).toEqual([])
+    expect(
+      getAlerts('CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA7')
+    ).toEqual([])
   })
 
   it('returns only alerts for the specified contract', () => {
@@ -289,7 +313,10 @@ describe('bucketAlertsByHour — 24-hour bucketing', () => {
   })
 
   it('places an alert from now in the last bucket', () => {
-    const buckets = bucketAlertsByHour([makeAlert({ timestamp: Date.now() })], 24)
+    const buckets = bucketAlertsByHour(
+      [makeAlert({ timestamp: Date.now() })],
+      24
+    )
     expect(buckets).toHaveLength(24)
     expect(buckets[23].count).toBe(1)
   })
@@ -338,16 +365,28 @@ describe('onAlertsChange', () => {
 
 describe('dashboard helpers — active webhooks & pause state (#229, #227)', () => {
   it('counts only active (enabled and with webhook_url) contracts', async () => {
-    const { countActiveWebhooks, isContractPaused } = await import('../dashboard')
+    const { countActiveWebhooks, isContractPaused } =
+      await import('../dashboard')
     const contracts: WatchedContract[] = [
-      makeContract({ id: '1', webhook_url: 'https://example.com/1', enabled: true }),
-      makeContract({ id: '2', webhook_url: 'https://example.com/2', enabled: false }),
+      makeContract({
+        id: '1',
+        webhook_url: 'https://example.com/1',
+        enabled: true,
+      }),
+      makeContract({
+        id: '2',
+        webhook_url: 'https://example.com/2',
+        enabled: false,
+      }),
       makeContract({ id: '3', webhook_url: '', enabled: true }),
     ]
     expect(countActiveWebhooks(contracts)).toBe(1)
     expect(isContractPaused({ enabled: false })).toBe(true)
     expect(isContractPaused({ paused: true })).toBe(true)
     expect(isContractPaused({ enabled: true })).toBe(false)
+  })
+})
+
 // ── Dashboard now tick memoization (issue #220) ──────────────────────────────
 
 describe('DashboardPage now memoization and tick updates (issue #220)', () => {
@@ -356,7 +395,9 @@ describe('DashboardPage now memoization and tick updates (issue #220)', () => {
     const alerts: AlertPayload[] = [makeAlert({ timestamp: 1000 })]
     let currentNow = 1000000
 
-    const bucketSpy = vi.fn((nowVal: number) => bucketAlertsByDay(alerts, 7, nowVal))
+    const bucketSpy = vi.fn((nowVal: number) =>
+      bucketAlertsByDay(alerts, 7, nowVal)
+    )
 
     // Initial tick computation
     bucketSpy(currentNow)
@@ -388,6 +429,9 @@ describe('DashboardPage now memoization and tick updates (issue #220)', () => {
 
     unsub()
     vi.useRealTimers()
+  })
+})
+
 describe('bucketAlerts — calendar alignment and DST resilience', () => {
   it('creates 7 calendar-aligned daily buckets with setDate', () => {
     const anchor = new Date('2026-11-03T15:00:00Z')
@@ -401,7 +445,9 @@ describe('bucketAlerts — calendar alignment and DST resilience', () => {
       expect(b.start.getHours()).toBe(0)
       expect(b.start.getMinutes()).toBe(0)
       expect(b.start.getSeconds()).toBe(0)
-      expect(b.end.getTime() - b.start.getTime()).toBeGreaterThanOrEqual(23 * 3600 * 1000)
+      expect(b.end.getTime() - b.start.getTime()).toBeGreaterThanOrEqual(
+        23 * 3600 * 1000
+      )
     }
   })
 
@@ -455,4 +501,3 @@ describe('bucketAlerts — calendar alignment and DST resilience', () => {
     }
   })
 })
-
