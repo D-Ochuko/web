@@ -6,9 +6,13 @@ import NetworkBadge from '@/components/NetworkBadge'
 import { subscribeWallet } from '@/lib/walletEvents'
 import type { Network } from '@/types'
 import {
+  FREIGHTER_REVOKE_HINT,
+  isUserDisconnected,
+  setUserDisconnected,
+} from '@/lib/disconnectFlag'
+import {
   connectFreighter,
   FreighterUnavailableError,
-  openFreighterInstallPage,
   readFreighterConnection,
 } from '@/lib/freighter'
 
@@ -16,7 +20,9 @@ import {
  * Maps a raw Freighter network id (e.g. `PUBLIC`, `TESTNET`) to the app's
  * `Network`. Returns `null` for ids we don't recognise (custom networks).
  */
-function toAppNetwork(freighterNetwork: string | null | undefined): Network | null {
+function toAppNetwork(
+  freighterNetwork: string | null | undefined
+): Network | null {
   if (!freighterNetwork) return null
   switch (freighterNetwork.toUpperCase()) {
     case 'PUBLIC':
@@ -43,11 +49,22 @@ export default function FreighterConnect({
   onDisconnect,
   className = '',
 }: FreighterConnectProps) {
-  const { publicKey, initialized, publish } = useWalletState()
+  const {
+    publicKey,
+    network: walletNetwork,
+    initialized,
+    publish,
+  } = useWalletState()
   const [network, setNetwork] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [missingExtension, setMissingExtension] = useState(false)
+  const installFocusListenerRef = useRef<(() => void) | null>(null)
+  const [userDisconnected, setUserDisconnectedState] = useState(false)
+
+  useEffect(() => {
+    setUserDisconnectedState(isUserDisconnected())
+  }, [])
 
   // Held in a ref rather than listed as a dependency: callers commonly pass an
   // inline arrow, which changes identity on every parent render. Depending on it
@@ -64,6 +81,10 @@ export default function FreighterConnect({
   useEffect(() => {
     if (publicKey) onConnectRef.current?.(publicKey)
   }, [publicKey])
+
+  useEffect(() => {
+    setNetwork(walletNetwork)
+  }, [walletNetwork])
 
   // The single app-level WatchWalletChanges watcher (in useWalletState) keeps
   // the shared public key current; here we only need to mirror the network id
@@ -82,10 +103,17 @@ export default function FreighterConnect({
 
     syncNetwork()
 
+    const unsubscribe = subscribeWallet((key, eventNetwork) => {
     const unsubscribe = subscribeWallet((key) => {
       if (key) {
         setMissingExtension(false)
-        syncNetwork()
+        // Prefer the network delivered on the event so the pill updates as soon
+        // as the user switches networks in Freighter, without a re-probe.
+        if (eventNetwork !== undefined) {
+          setNetwork(eventNetwork)
+        } else {
+          syncNetwork()
+        }
       } else {
         setNetwork(null)
       }
@@ -97,23 +125,15 @@ export default function FreighterConnect({
     }
   }, [])
 
-  // One-off initial read so an already-authorised extension is reflected on
-  // mount without waiting for the next watcher tick.
-  useEffect(() => {
-    let cancelled = false
-    readFreighterConnection()
-      .then((connection) => {
-        if (!cancelled && connection?.publicKey) {
-          setMissingExtension(false)
-        }
-      })
-      .catch(() => {
-        // Connection check failed
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  useEffect(
+    () => () => {
+      if (installFocusListenerRef.current) {
+        window.removeEventListener('focus', installFocusListenerRef.current)
+        installFocusListenerRef.current = null
+      }
+    },
+    []
+  )
 
   async function connect() {
     if (loading) return
@@ -123,13 +143,29 @@ export default function FreighterConnect({
     try {
       setMissingExtension(false)
       const session = await connectFreighter()
+      setUserDisconnectedState(false)
       publish(session.publicKey)
       setNetwork(session.network ?? null)
+      // onConnect fires from the publicKey effect above; calling it here too
+      // would notify the parent twice for one connection.
+      if (!session.network) {
+        // Network details were slow or failed after approval: re-read them in
+        // the background instead of blocking or failing the connection.
+        void readFreighterConnection()
+          .then((connection) => {
+            if (connection?.network) setNetwork(connection.network)
+          })
+          .catch(() => {
+            // Leave the network unknown; the watcher will refresh it.
+          })
+      }
       onConnect?.(session.publicKey)
     } catch (err) {
       if (err instanceof FreighterUnavailableError) {
+        // Don't auto-open the install page: this runs after an awaited probe,
+        // outside the click's user-activation window, so browsers block it.
+        // The inline "Install Freighter" link below is the user-initiated path.
         setMissingExtension(true)
-        openFreighterInstallPage()
       }
       setError(err instanceof Error ? err.message : 'Connection rejected')
     } finally {
@@ -141,22 +177,41 @@ export default function FreighterConnect({
   // of the session. Nothing is persisted: the wallet is the source of truth, so
   // a key cached in localStorage would outlive an account switch in Freighter.
   function disconnect() {
+    setUserDisconnected()
+    setUserDisconnectedState(true)
     publish(null)
     setNetwork(null)
+    // Clear the window global too, so nothing reading it still sees the old
+    // public key after disconnecting. Guarded: the property may not be
+    // configurable in every environment.
+    try {
+      delete (window as { __freighterPublicKey?: string }).__freighterPublicKey
+    } catch {
+      // Ignore non-configurable property errors
+    }
     onDisconnect?.()
   }
 
   const handleInstallClick = () => {
+    if (installFocusListenerRef.current) {
+      window.removeEventListener('focus', installFocusListenerRef.current)
+    }
+
     const onFocusBack = () => {
       window.removeEventListener('focus', onFocusBack)
+      installFocusListenerRef.current = null
       readFreighterConnection()
         .then((connection) => {
-          if (connection?.publicKey) setMissingExtension(false)
+          if (connection?.publicKey) {
+            setMissingExtension(false)
+            setError(null)
+          }
         })
         .catch(() => {
           // Ignore re-check errors
         })
     }
+    installFocusListenerRef.current = onFocusBack
     window.addEventListener('focus', onFocusBack)
   }
 
@@ -239,14 +294,26 @@ export default function FreighterConnect({
         )}
         Connect Freighter
       </button>
+      {userDisconnected && !missingExtension ? (
+        <p
+          className="mt-2 text-xs text-zinc-500"
+          data-testid="freighter-revoke-hint"
+        >
+          {FREIGHTER_REVOKE_HINT}
+        </p>
+      ) : null}
       {missingExtension ? (
-        <div className="mt-2 flex flex-col gap-1.5 text-xs text-zinc-400" role="alert">
+        <div
+          className="mt-2 flex flex-col gap-1.5 text-xs text-zinc-400"
+          role="alert"
+        >
           <p>
             Freighter not installed —{' '}
             <a
               href="https://www.freighter.app/"
               target="_blank"
               rel="noopener noreferrer"
+              onClick={handleInstallClick}
               className="text-indigo-400 underline hover:text-indigo-300"
             >
               Install Freighter

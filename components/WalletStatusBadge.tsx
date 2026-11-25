@@ -4,30 +4,30 @@ import { useEffect, useState } from 'react'
 import { subscribeWallet } from '@/lib/walletEvents'
 import { readFreighterConnection } from '@/lib/freighter'
 import NetworkBadge from '@/components/NetworkBadge'
-import { Network } from '@/lib/types'
+import { Network } from '@/types'
 
-export type WalletStatus = 'checking' | 'connected' | 'disconnected' | 'unavailable'
+/**
+ * `checking` is the initial state: the extension's answer is unknown until
+ * `readFreighterConnection()` settles, and showing "Unavailable" first made
+ * the badge flash grey on every navigation.
+ */
+export type WalletStatus =
+  'checking' | 'connected' | 'disconnected' | 'unavailable'
 
 /**
  * Maps a raw Freighter network id to the app's `Network`. `PUBLIC` is
  * Freighter's name for mainnet, which is not obvious to new users.
  */
 const FREIGHTER_NETWORK_MAP: Record<string, Network> = {
-  PUBLIC: Network.MAINNET,
-  TESTNET: Network.TESTNET,
-  FUTURENET: Network.FUTURENET,
+  PUBLIC: 'mainnet',
+  TESTNET: 'testnet',
+  FUTURENET: 'futurenet',
 }
 
 function resolveNetwork(id: string | null | undefined): Network | null {
   if (!id) return null
   return FREIGHTER_NETWORK_MAP[id.toUpperCase()] ?? null
 }
-/**
- * `checking` is the initial state: the extension's answer is unknown until
- * `readFreighterConnection()` settles, and showing "Unavailable" first made
- * the badge flash grey on every navigation.
- */
-export type WalletStatus = 'checking' | 'connected' | 'disconnected' | 'unavailable'
 
 export default function WalletStatusBadge() {
   const [status, setStatus] = useState<WalletStatus>('checking')
@@ -56,13 +56,18 @@ export default function WalletStatusBadge() {
         if (!cancelled) setStatus('disconnected')
       })
 
+    // The probe above only covers this mount. A connect, disconnect or
+    // network switch triggered anywhere else in the app arrives on the
+    // event bus.
     const unsubscribe = subscribeWallet((publicKey, network) => {
       setStatus(publicKey ? 'connected' : 'disconnected')
       setNetworkId(network ?? null)
     // The probe above only covers this mount. A connect or disconnect
-    // triggered anywhere else in the app arrives on the event bus.
+    // triggered anywhere else in the app arrives on the event bus, which
+    // only carries the public key, so a disconnect also clears the network.
     const unsubscribe = subscribeWallet((publicKey) => {
       setStatus(publicKey ? 'connected' : 'disconnected')
+      if (!publicKey) setNetworkId(null)
     })
 
     return () => {

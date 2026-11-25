@@ -39,5 +39,36 @@ const UNKNOWN_STYLE = 'bg-zinc-800 text-zinc-400 border-zinc-600'
 /** Returns metadata for a rule type, falling back to a neutral style and the raw string for unknown types. */
 export function getRuleMeta(type: AlertRuleType | string): RuleMeta {
   if (isAlertRuleType(type)) return RULE_META[type]
-  return { label: type || 'Unknown', description: `Unknown rule type: ${type || '(empty)'}`, style: UNKNOWN_STYLE }
+  return {
+    label: type || 'Unknown',
+    description: `Unknown rule type: ${type || '(empty)'}`,
+    style: UNKNOWN_STYLE,
+  }
+}
+
+/**
+ * Builds the notification title, prefixing the network for non-mainnet contracts.
+ * Mainnet titles stay unprefixed.
+ */
+export function buildNotificationTitle(
+  network: string | undefined,
+  label: string
+): string {
+  const isMainnet = !network || network.toLowerCase() === 'mainnet'
+  return isMainnet ? label : `[${network}] ${label}`
+}
+
+/**
+ * Builds the notification body from the rule label, amount and function name.
+ * Omits missing details so the body stays clean.
+ */
+export function buildNotificationBody(
+  label: string,
+  amount: string | undefined,
+  functionName: string | undefined
+): string {
+  const parts: string[] = [label]
+  if (amount) parts.push(amount)
+  if (functionName) parts.push(functionName)
+  return parts.join(' · ')
 }

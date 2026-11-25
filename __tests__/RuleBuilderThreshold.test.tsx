@@ -33,12 +33,33 @@ describe('RuleBuilder LargeTransfer threshold validation', () => {
 
   it('rejects 50000000000.0000001 (above the supply, though equal as a float)', () => {
     const onChange = addLargeTransfer('50000000000.0000001')
-    expect(screen.getByText(/cannot exceed 50,000,000,000 XLM/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/cannot exceed 50,000,000,000 XLM/i)
+    ).toBeInTheDocument()
     expect(onChange).not.toHaveBeenCalled()
   })
 
   it('accepts the smallest unit, 0.0000001', () => {
     const onChange = addLargeTransfer('0.0000001')
+    expect(onChange).toHaveBeenCalledWith([
+      expect.objectContaining({ type: 'LargeTransfer', threshold_xlm: 1e-7 }),
+    ])
+  })
+
+  it('saves a tiny threshold unchanged after Edit', () => {
+    const onChange = vi.fn()
+    render(
+      <RuleBuilder
+        rules={[{ type: 'LargeTransfer', threshold_xlm: 1e-7 }]}
+        onChange={onChange}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }))
+    expect(screen.getByPlaceholderText(/e\.g\. 10000/i)).toHaveValue(
+      '0.0000001'
+    )
+    fireEvent.click(screen.getByRole('button', { name: /save rule/i }))
+    expect(screen.queryByText(/plain decimal number/i)).not.toBeInTheDocument()
     expect(onChange).toHaveBeenCalledWith([
       expect.objectContaining({ type: 'LargeTransfer', threshold_xlm: 1e-7 }),
     ])

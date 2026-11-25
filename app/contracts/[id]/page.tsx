@@ -2,7 +2,15 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { WatchedContract, AlertPayload, AlertRule, isRuleEnabled } from '@/types'
+import { WatchedContract, AlertPayload, AlertRule, WebhookFormat, isRuleEnabled } from '@/types'
+import { WEBHOOK_FORMAT_LABELS, suggestWebhookFormat } from '@/lib/webhookFormat'
+import WebhookFormatField from '@/components/WebhookFormatField'
+import {
+  WatchedContract,
+  AlertPayload,
+  AlertRule,
+  isRuleEnabled,
+} from '@/types'
 import { syncSaveContract, syncDeleteContract } from '@/lib/contractSync'
 import {
   getContract,
@@ -16,6 +24,7 @@ import {
   validateWebhookUrl,
 } from '@/lib/stellar'
 import { generateWebhookSecret } from '@/lib/webhookSignature'
+import { MAX_LABEL_LENGTH } from '@/lib/importSchema'
 import {
   getWalletNetwork,
   networkMismatchWarning,
@@ -27,9 +36,15 @@ import { useNow } from '@/hooks/useNow'
 import { useToast } from '@/components/ToastProvider'
 import NetworkBadge from '@/components/NetworkBadge'
 import NetworkEditField from '@/components/NetworkEditField'
+import ContractVerification, {
+  type CheckState,
+} from '@/components/ContractVerification'
+import { deploymentBlocksSave } from '@/lib/contractExists'
 import AlertRuleBadge from '@/components/AlertRuleBadge'
 import WebhookLog from '@/components/WebhookLog'
 import WebhookTestButton from '@/components/WebhookTestButton'
+import WebhookHeadersField from '@/components/WebhookHeadersField'
+import { maskWebhookHeaderValue } from '@/lib/webhookHeaders'
 import RuleBuilder from '@/components/RuleBuilder'
 import CopyButton from '@/components/CopyButton'
 import NotificationToggle from '@/components/NotificationToggle'
@@ -47,7 +62,11 @@ function maskWebhookUrl(url: string): string {
   }
 }
 
-export default function ContractDetailPage({ params }: { params: { id: string } }) {
+export default function ContractDetailPage({
+  params,
+}: {
+  params: { id: string }
+}) {
   const router = useRouter()
   const { trackEvent } = useAnalytics()
   const { showToast } = useToast()
@@ -66,18 +85,44 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
   const [showEditMetadata, setShowEditMetadata] = useState(false)
   const [editedLabel, setEditedLabel] = useState('')
   const [editedWebhookUrl, setEditedWebhookUrl] = useState('')
-  const [editedNetwork, setEditedNetwork] = useState<WatchedContract['network']>('testnet')
+  const [editedNetwork, setEditedNetwork] =
+    useState<WatchedContract['network']>('testnet')
   const [editedWebhookSecret, setEditedWebhookSecret] = useState('')
+  const [editedWebhookHeaders, setEditedWebhookHeaders] = useState<Record<string, string>>({})
+  const [editedWebhookFormat, setEditedWebhookFormat] = useState<WebhookFormat>('json')
+  // Re-keys the header editor so it re-reads the stored headers on each open.
+  const [metadataFormKey, setMetadataFormKey] = useState(0)
   const [metadataError, setMetadataError] = useState<string | null>(null)
   const [metadataWarning, setMetadataWarning] = useState<string | null>(null)
-  const [editedLabelWarning, setEditedLabelWarning] = useState<string | null>(null)
+  const [editedLabelWarning, setEditedLabelWarning] = useState<string | null>(
+    null
+  )
+  const [verificationStatus, setVerificationStatus] =
+    useState<CheckState>('idle')
+  const [verificationReason, setVerificationReason] = useState<string | null>(
+    null
+  )
+  const [verificationLiveUntil, setVerificationLiveUntil] = useState<
+    number | null
+  >(null)
+  const [verificationOverridden, setVerificationOverridden] = useState(false)
 
-  const [walletNetworkMismatch, setWalletNetworkMismatch] = useState<string | null>(null)
+  const [walletNetworkMismatch, setWalletNetworkMismatch] = useState<
+    string | null
+  >(null)
 
-  const sync = useAlertSync(contract?.contract_id, contract?.network, (fresh) => {
-    setAlerts(getAlerts(contract?.contract_id ?? params.id))
-    notifyNewAlerts(fresh, contract?.label ?? params.id, `/contracts/${params.id}`)
-  })
+  const sync = useAlertSync(
+    contract?.contract_id,
+    contract?.network,
+    (fresh) => {
+      setAlerts(getAlerts(contract?.contract_id ?? params.id))
+      notifyNewAlerts(
+        fresh,
+        contract?.label ?? params.id,
+        `/contracts/${params.id}`
+      )
+    }
+  )
 
   useEffect(() => {
     const c = getContract(params.id)
@@ -103,7 +148,9 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
         }
         const walletNetwork = await getWalletNetwork()
         setWalletNetworkMismatch(
-          walletNetwork ? networkMismatchWarning(walletNetwork, contract.network) : null
+          walletNetwork
+            ? networkMismatchWarning(walletNetwork, contract.network)
+            : null
         )
       } catch {
         setWalletNetworkMismatch(null)
@@ -158,7 +205,10 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
     setEditedRules(contract!.rules)
     setRulesError(null)
     setShowEditRules(true)
-    trackEvent('rule_edit_opened', { contractId: params.id, ruleCount: contract!.rules.length })
+    trackEvent('rule_edit_opened', {
+      contractId: params.id,
+      ruleCount: contract!.rules.length,
+    })
   }
 
   async function saveRules() {
@@ -168,12 +218,17 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
     }
     const updated = { ...contract!, rules: editedRules, updated_at: Date.now() }
     if (!(await persist(updated))) {
-      setRulesError('Could not save: browser storage is full or conflict occurred')
+      setRulesError(
+        'Could not save: browser storage is full or conflict occurred'
+      )
       return
     }
     setContract(updated)
     setShowEditRules(false)
-    trackEvent('rule_edit_saved', { contractId: params.id, ruleCount: editedRules.length })
+    trackEvent('rule_edit_saved', {
+      contractId: params.id,
+      ruleCount: editedRules.length,
+    })
   }
 
   async function toggleRule(index: number) {
@@ -186,10 +241,16 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
 
   async function toggleContractPause() {
     const isEnabled = contract?.enabled ?? true
-    const updated = { ...contract!, enabled: !isEnabled, updated_at: Date.now() }
+    const updated = {
+      ...contract!,
+      enabled: !isEnabled,
+      updated_at: Date.now(),
+    }
     if (!(await persist(updated))) return
     setContract(updated)
-    trackEvent(updated.enabled ? 'contract_resumed' : 'contract_paused', { contractId: params.id })
+    trackEvent(updated.enabled ? 'contract_resumed' : 'contract_paused', {
+      contractId: params.id,
+    })
   }
 
   function hasUnsavedRuleChanges(): boolean {
@@ -207,7 +268,8 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
 
   function confirmDiscard() {
     setShowUnsavedWarning(false)
-    if (showEditRules) trackEvent('rule_edit_cancelled', { contractId: params.id })
+    if (showEditRules)
+      trackEvent('rule_edit_cancelled', { contractId: params.id })
     setShowEditRules(false)
     setShowEditMetadata(false)
   }
@@ -217,9 +279,16 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
     setEditedWebhookUrl(contract!.webhook_url)
     setEditedNetwork(contract!.network)
     setEditedWebhookSecret(contract!.webhook_secret ?? '')
+    setEditedWebhookHeaders(contract!.webhook_headers ?? {})
+    setEditedWebhookFormat(contract!.webhook_format ?? 'json')
+    setMetadataFormKey((key) => key + 1)
     setMetadataError(null)
     setMetadataWarning(null)
     setEditedLabelWarning(null)
+    setVerificationStatus('idle')
+    setVerificationReason(null)
+    setVerificationLiveUntil(null)
+    setVerificationOverridden(false)
     setShowEditMetadata(true)
     trackEvent('metadata_edit_opened', { contractId: params.id })
   }
@@ -232,8 +301,8 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
       setMetadataError('Label is required')
       return
     }
-    if (trimmedLabel.length > 100) {
-      setMetadataError('Label must be 100 characters or less')
+    if (trimmedLabel.length > MAX_LABEL_LENGTH) {
+      setMetadataError(`Label must be ${MAX_LABEL_LENGTH} characters or less`)
       return
     }
     if (!trimmedWebhookUrl) {
@@ -260,8 +329,27 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
           c.network === editedNetwork
       )
     ) {
-      setMetadataError('A contract with this ID already exists on the selected network')
+      setMetadataError(
+        'A contract with this ID already exists on the selected network'
+      )
       return
+    }
+
+    // Switching network deletes the old network's alert history, so require the
+    // contract to be found on the new one (or an explicit override) first.
+    if (networkChanged) {
+      if (verificationStatus === 'checking') {
+        setMetadataError(
+          'Still checking the deployment on the selected network. Try again in a moment.'
+        )
+        return
+      }
+      if (deploymentBlocksSave(verificationStatus, verificationOverridden)) {
+        setMetadataError(
+          `Contract not found on ${editedNetwork}. Tick the override to save anyway.`
+        )
+        return
+      }
     }
 
     const updated: WatchedContract = {
@@ -270,11 +358,16 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
       webhook_url: trimmedWebhookUrl,
       network: editedNetwork,
       webhook_secret: editedWebhookSecret.trim() || undefined,
+      webhook_headers:
+        Object.keys(editedWebhookHeaders).length > 0 ? editedWebhookHeaders : undefined,
+      webhook_format: editedWebhookFormat === 'json' ? undefined : editedWebhookFormat,
       updated_at: Date.now(),
     }
 
     if (!(await persist(updated))) {
-      setMetadataError('Could not save: browser storage is full or conflict occurred')
+      setMetadataError(
+        'Could not save: browser storage is full or conflict occurred'
+      )
       return
     }
 
@@ -282,7 +375,10 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
     if (networkChanged) {
       deleteAlertsByNetwork(contract!.contract_id, contract!.network)
       setAlerts([])
-      trackEvent('network_switched', { contractId: params.id, network: editedNetwork })
+      trackEvent('network_switched', {
+        contractId: params.id,
+        network: editedNetwork,
+      })
     }
 
     setContract(updated)
@@ -295,17 +391,10 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
       editedLabel !== contract?.label ||
       editedWebhookUrl !== contract?.webhook_url ||
       editedNetwork !== contract?.network ||
-      editedWebhookSecret !== (contract?.webhook_secret ?? '')
+      editedWebhookSecret !== (contract?.webhook_secret ?? '') ||
+      JSON.stringify(editedWebhookHeaders) !== JSON.stringify(contract?.webhook_headers ?? {}) ||
+      editedWebhookFormat !== (contract?.webhook_format ?? 'json')
     )
-  }
-
-  async function copySecret() {
-    if (!editedWebhookSecret) return
-    try {
-      await navigator.clipboard.writeText(editedWebhookSecret)
-    } catch {
-      // Clipboard unavailable; ignore
-    }
   }
 
   function handleCancelMetadataEdit() {
@@ -323,20 +412,43 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="text-center space-y-4 max-w-sm">
           <div className="flex justify-center">
-            <svg className="w-16 h-16 text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            <svg
+              className="w-16 h-16 text-zinc-600"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
             </svg>
           </div>
-          <h2 className="text-xl font-semibold text-zinc-100">Contract Not Found</h2>
+          <h2 className="text-xl font-semibold text-zinc-100">
+            Contract Not Found
+          </h2>
           <p className="text-sm text-zinc-400">
-            The contract you&apos;re looking for doesn&apos;t exist or has been deleted.
+            The contract you&apos;re looking for doesn&apos;t exist or has been
+            deleted.
           </p>
           <button
             onClick={() => router.push('/contracts')}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-medium text-white transition-colors"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M10 19l-7-7m0 0l7-7m-7 7h18"
+              />
             </svg>
             Back to Contracts
           </button>
@@ -349,7 +461,8 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
 
   const isEnabled = contract.enabled ?? true
   // Test deliveries simulate the first enabled rule.
-  const testRule = contract.rules.find((r) => isRuleEnabled(r)) ?? contract.rules[0]
+  const testRule =
+    contract.rules.find((r) => isRuleEnabled(r)) ?? contract.rules[0]
 
   return (
     <div className="space-y-8 max-w-4xl">
@@ -358,8 +471,18 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
           data-testid="network-mismatch-banner"
           className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3.5 text-sm text-amber-300 flex items-center gap-2"
         >
-          <svg className="w-5 h-5 flex-shrink-0 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          <svg
+            className="w-5 h-5 flex-shrink-0 text-amber-400"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+            />
           </svg>
           <span>{walletNetworkMismatch}</span>
         </div>
@@ -369,7 +492,9 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div className="space-y-1 min-w-0">
           <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-bold text-zinc-100">{contract.label}</h1>
+            <h1 className="text-2xl font-bold text-zinc-100">
+              {contract.label}
+            </h1>
             <NetworkBadge network={contract.network} />
           </div>
           <div className="flex items-center gap-2">
@@ -387,7 +512,9 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
           {/* Pause/Resume Switch */}
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-700 bg-zinc-900">
-            <span className="text-sm text-zinc-300 min-w-[3rem]">{isEnabled ? 'Active' : 'Paused'}</span>
+            <span className="text-sm text-zinc-300 min-w-[3rem]">
+              {isEnabled ? 'Active' : 'Paused'}
+            </span>
             <button
               type="button"
               role="switch"
@@ -434,10 +561,16 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
       </div>
 
       {/* Edit Details Modal */}
-      <Modal open={showEditMetadata} onClose={handleCancelMetadataEdit} title="Edit Details">
+      <Modal
+        open={showEditMetadata}
+        onClose={handleCancelMetadataEdit}
+        title="Edit Details"
+      >
         <div className="space-y-4">
           <div className="space-y-1">
-            <label htmlFor="edit-label" className="text-sm text-zinc-400">Label</label>
+            <label htmlFor="edit-label" className="text-sm text-zinc-400">
+              Label
+            </label>
             <input
               id="edit-label"
               value={editedLabel}
@@ -448,21 +581,29 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
                 if (
                   trimmed &&
                   getContracts().some(
-                    (c) => c.id !== contract.id && c.label.trim().toLowerCase() === trimmed
+                    (c) =>
+                      c.id !== contract.id &&
+                      c.label.trim().toLowerCase() === trimmed
                   )
                 ) {
-                  setEditedLabelWarning('A contract with this label already exists')
+                  setEditedLabelWarning(
+                    'A contract with this label already exists'
+                  )
                 } else {
                   setEditedLabelWarning(null)
                 }
               }}
               className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100"
             />
-            {editedLabelWarning && <p className="text-xs text-amber-400">{editedLabelWarning}</p>}
+            {editedLabelWarning && (
+              <p className="text-xs text-amber-400">{editedLabelWarning}</p>
+            )}
           </div>
 
           <div className="space-y-1">
-            <label htmlFor="edit-webhook-url" className="text-sm text-zinc-400">Webhook URL</label>
+            <label htmlFor="edit-webhook-url" className="text-sm text-zinc-400">
+              Webhook URL
+            </label>
             <input
               id="edit-webhook-url"
               value={editedWebhookUrl}
@@ -472,7 +613,10 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
           </div>
 
           <div className="space-y-1">
-            <label htmlFor="edit-webhook-secret" className="text-sm text-zinc-400">
+            <label
+              htmlFor="edit-webhook-secret"
+              className="text-sm text-zinc-400"
+            >
               Webhook Signing Secret
             </label>
             <div className="flex items-center gap-2">
@@ -492,20 +636,36 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
               >
                 {editedWebhookSecret ? 'Rotate' : 'Generate'}
               </button>
-              <button
-                type="button"
-                onClick={copySecret}
+              <CopyButton
+                text={editedWebhookSecret}
                 disabled={!editedWebhookSecret}
-                className="px-3 py-1.5 rounded-lg border border-zinc-700 text-sm text-zinc-300 hover:text-zinc-100 transition-colors disabled:opacity-50"
-              >
-                Copy
-              </button>
+                aria-label="Copy webhook secret"
+              />
             </div>
           </div>
 
+          <WebhookFormatField
+            id="edit-contract-format"
+            format={editedWebhookFormat}
+            suggestedFormat={suggestWebhookFormat(editedWebhookUrl)}
+            onChange={setEditedWebhookFormat}
+          />
+
+          <WebhookHeadersField
+            key={metadataFormKey}
+            idPrefix="edit-contract"
+            headers={editedWebhookHeaders}
+            onChange={setEditedWebhookHeaders}
+          />
+
           <NetworkEditField
             currentNetwork={editedNetwork}
-            onNetworkChange={setEditedNetwork}
+            onNetworkChange={(network) => {
+              setEditedNetwork(network)
+              // Drop the previous network's result until the new check reports.
+              setVerificationStatus('idle')
+              setVerificationOverridden(false)
+            }}
             checkDuplicate={(network) =>
               getContracts().some(
                 (c) =>
@@ -515,6 +675,23 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
               )
             }
           />
+
+          {editedNetwork !== contract.network && (
+            <ContractVerification
+              network={editedNetwork}
+              contractId={contract.contract_id}
+              status={verificationStatus}
+              reason={verificationReason}
+              liveUntilLedgerSeq={verificationLiveUntil}
+              onStatusChange={(status, reason, liveUntil) => {
+                setVerificationStatus(status)
+                setVerificationReason(reason ?? null)
+                setVerificationLiveUntil(liveUntil ?? null)
+              }}
+              overridden={verificationOverridden}
+              onOverrideChange={setVerificationOverridden}
+            />
+          )}
 
           {metadataWarning && (
             <div className="flex items-start justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-sm text-amber-300">
@@ -529,7 +706,9 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
               </button>
             </div>
           )}
-          {metadataError && <p className="text-sm text-red-400">{metadataError}</p>}
+          {metadataError && (
+            <p className="text-sm text-red-400">{metadataError}</p>
+          )}
 
           <div className="flex flex-wrap items-start justify-between gap-2 pt-2">
             <WebhookTestButton
@@ -538,6 +717,8 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
               network={editedNetwork}
               rule={testRule}
               secret={editedWebhookSecret}
+              headers={editedWebhookHeaders}
+              format={editedWebhookFormat}
             />
             <div className="flex gap-2">
               <button
@@ -615,8 +796,9 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
         <div className="space-y-4">
           <p className="text-sm text-zinc-400">
             Are you sure you want to delete{' '}
-            <span className="font-medium text-zinc-200">{contract.label}</span>? This removes the
-            contract and its alert history and cannot be undone.
+            <span className="font-medium text-zinc-200">{contract.label}</span>?
+            This removes the contract and its alert history and cannot be
+            undone.
           </p>
           <div className="flex justify-end gap-2 pt-2">
             <button
@@ -643,12 +825,15 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
             <dt className="text-zinc-500">Registered</dt>
             <dd className="text-zinc-200">{formatDate(contract.created_at)}</dd>
           </div>
-          {contract.updated_at && contract.updated_at !== contract.created_at && (
-            <div>
-              <dt className="text-zinc-500">Last modified</dt>
-              <dd className="text-zinc-200">{formatDate(contract.updated_at)}</dd>
-            </div>
-          )}
+          {contract.updated_at &&
+            contract.updated_at !== contract.created_at && (
+              <div>
+                <dt className="text-zinc-500">Last modified</dt>
+                <dd className="text-zinc-200">
+                  {formatDate(contract.updated_at)}
+                </dd>
+              </div>
+            )}
         </dl>
       </div>
 
@@ -673,7 +858,9 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
                 <div className="flex items-center gap-2">
                   <AlertRuleBadge type={rule.type} />
                   {formatRuleSummary(rule) && (
-                    <span className="text-xs font-mono text-zinc-400">{formatRuleSummary(rule)}</span>
+                    <span className="text-xs font-mono text-zinc-400">
+                      {formatRuleSummary(rule)}
+                    </span>
                   )}
                 </div>
                 <button
@@ -681,6 +868,9 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
                   role="switch"
                   aria-checked={isRuleEnabled(rule)}
                   aria-label={`${isRuleEnabled(rule) ? 'Disable' : 'Enable'} ${formatRuleAccessibleName(rule)}`}
+                  aria-label={
+                    isRuleEnabled(rule) ? 'Disable rule' : 'Enable rule'
+                  }
                   onClick={() => toggleRule(i)}
                   className="text-xs text-zinc-400 hover:text-zinc-100"
                 >
@@ -701,12 +891,26 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
           </span>
           <CopyButton text={contract.webhook_url} />
         </div>
+        <p className="text-xs text-zinc-500">
+          Format: {WEBHOOK_FORMAT_LABELS[contract.webhook_format ?? 'json']}
+        </p>
+        {Object.keys(contract.webhook_headers ?? {}).length > 0 && (
+          <ul aria-label="Custom webhook headers" className="space-y-1 text-xs font-mono text-zinc-400">
+            {Object.entries(contract.webhook_headers ?? {}).map(([name, value]) => (
+              <li key={name}>
+                {name}: {maskWebhookHeaderValue(value)}
+              </li>
+            ))}
+          </ul>
+        )}
         <WebhookTestButton
           url={contract.webhook_url}
           contractId={contract.contract_id}
           network={contract.network}
           rule={testRule}
           secret={contract.webhook_secret}
+          headers={contract.webhook_headers}
+          format={contract.webhook_format}
         />
       </div>
 
@@ -718,17 +922,36 @@ export default function ContractDetailPage({ params }: { params: { id: string } 
             {sync.enabled && (
               <div className="flex items-center gap-2 text-xs bg-zinc-900/50 px-3 py-1.5 rounded-lg border border-zinc-800">
                 {sync.live ? (
-                  <span className="text-emerald-400 flex items-center gap-1.5" data-testid="sync-status-live">
+                  <span
+                    className="text-emerald-400 flex items-center gap-1.5"
+                    data-testid="sync-status-live"
+                  >
                     <span className="relative flex h-2 w-2">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                       <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                     </span>
-                    Live · synced {sync.lastSync ? formatRelativeTime(sync.lastSync, now) : 'just now'}
+                    Live · synced{' '}
+                    {sync.lastSync
+                      ? formatRelativeTime(sync.lastSync, now)
+                      : 'just now'}
                   </span>
                 ) : (
-                  <span className="text-red-400 flex items-center gap-1" data-testid="sync-status-error">
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  <span
+                    className="text-red-400 flex items-center gap-1"
+                    data-testid="sync-status-error"
+                  >
+                    <svg
+                      className="w-3 h-3"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
                     </svg>
                     Sync failing
                   </span>

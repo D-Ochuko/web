@@ -1,0 +1,425 @@
+openapi: 3.0.3
+info:
+  title: tx-watch-core REST API
+  version: 0.1.0
+  description: |
+    The REST contract the web dashboard relies on when `NEXT_PUBLIC_API_URL` is
+    configured (API mode). This document is the single source of truth for the
+    routes, request/response shapes and error envelopes implemented by
+    `tx-watch-core` and consumed by `lib/contractsApi.ts`, `lib/alertSource.ts`
+    and `lib/api.ts`.
+
+    Until now these shapes were only described in "ASSUMED" comments scattered
+    across the client and in `docs/API_AUTH.md`. Keep this file and the
+    generated types in `lib/api-types.ts` in sync (`npm run gen:api-types`);
+    `__tests__/openapi.fixtures.test.ts` validates the fixtures in
+    `docs/fixtures/` against the schemas below so the client's expectations
+    cannot silently drift from the contract.
+
+    Authentication is required on every route; see `docs/API_AUTH.md`.
+servers:
+  - url: '{baseUrl}'
+    description: tx-watch-core base URL (`NEXT_PUBLIC_API_URL`)
+    variables:
+      baseUrl:
+        default: https://api.example.com
+        description: Origin and optional path prefix of the core API.
+
+tags:
+  - name: contracts
+    description: Watched contracts and their alert rules.
+  - name: alerts
+    description: Alerts emitted for watched contracts.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /contracts:
+    get:
+      tags: [contracts]
+      summary: List the caller's watched contracts
+      operationId: listContracts
+      responses:
+        '200':
+          description: The caller's watched contracts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WatchedContract'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    post:
+      tags: [contracts]
+      summary: Create a watched contract
+      operationId: createContract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WatchedContract'
+      responses:
+        '201':
+          description: The created contract, as stored by the core.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WatchedContract'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /contracts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ContractId'
+    put:
+      tags: [contracts]
+      summary: Replace a watched contract
+      operationId: updateContract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WatchedContract'
+      responses:
+        '200':
+          description: The updated contract, as stored by the core.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WatchedContract'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    delete:
+      tags: [contracts]
+      summary: Delete a watched contract
+      operationId: removeContract
+      responses:
+        '204':
+          description: The contract was deleted. No response body.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /alerts:
+    get:
+      tags: [alerts]
+      summary: List alerts for a watched contract
+      operationId: fetchAlerts
+      description: |
+        Returns the alerts recorded for one contract on one network. The core
+        responds with either a bare array or an envelope object; both are
+        accepted by the client. `since` is epoch milliseconds and, when given,
+        restricts the response to alerts at or after that instant.
+      parameters:
+        - $ref: '#/components/parameters/ContractIdQuery'
+        - $ref: '#/components/parameters/NetworkQuery'
+        - $ref: '#/components/parameters/SinceQuery'
+      responses:
+        '200':
+          description: The alerts for the contract, oldest first.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items:
+                      $ref: '#/components/schemas/AlertPayload'
+                  - $ref: '#/components/schemas/AlertEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        `Authorization: Bearer <api key>` by default. Any scheme the core
+        accepts may be substituted via `setAuthTokenProvider`; see
+        `docs/API_AUTH.md`.
+
+  parameters:
+    ContractId:
+      name: id
+      in: path
+      required: true
+      description: The client-side contract identifier (`WatchedContract.id`).
+      schema:
+        type: string
+    ContractIdQuery:
+      name: contract_id
+      in: query
+      required: true
+      description: The contract's on-chain id (`WatchedContract.contract_id`).
+      schema:
+        type: string
+    NetworkQuery:
+      name: network
+      in: query
+      required: true
+      description: The Stellar network the contract lives on.
+      schema:
+        $ref: '#/components/schemas/Network'
+    SinceQuery:
+      name: since
+      in: query
+      required: false
+      description: |
+        Epoch milliseconds. Only alerts with `timestamp >= since` are returned.
+        The poller sends the newest cached timestamp to fetch deltas.
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+
+  responses:
+    BadRequest:
+      description: The request body or parameters were invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+        text/plain:
+          schema:
+            type: string
+    Unauthorized:
+      description: |
+        The credential is missing, invalid or expired. The client dispatches a
+        `txwatch:auth-required` event and surfaces an `ApiError` with
+        `status: 401`. May include a `WWW-Authenticate` header.
+      headers:
+        WWW-Authenticate:
+          description: Present when the core wants to advertise the scheme.
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+        text/plain:
+          schema:
+            type: string
+    NotFound:
+      description: |
+        No such contract for this credential. The client must not reveal the
+        existence of records owned by another credential.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+        text/plain:
+          schema:
+            type: string
+    RateLimited:
+      description: |
+        Too many requests. The `Retry-After` header (delta-seconds or
+        HTTP-date) tells the alert poller how long to wait before retrying.
+      headers:
+        Retry-After:
+          description: Seconds or an HTTP-date after which the client may retry.
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+        text/plain:
+          schema:
+            type: string
+    Unavailable:
+      description: |
+        The core is overloaded or temporarily unavailable. `Retry-After` is
+        honoured exactly like `429`.
+      headers:
+        Retry-After:
+          description: Seconds or an HTTP-date after which the client may retry.
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+        text/plain:
+          schema:
+            type: string
+
+  schemas:
+    Network:
+      type: string
+      description: Stellar network.
+      enum: [mainnet, testnet, futurenet]
+
+    AlertRuleType:
+      type: string
+      description: The rule variants tx-watch-core understands.
+      enum:
+        - LargeTransfer
+        - AdminFunctionCalled
+        - AnyTransaction
+        - FunctionCalled
+        - TransactionFailed
+
+    AlertRule:
+      type: object
+      description: |
+        A notification rule attached to a watched contract. The relevant fields
+        depend on `type`; the client validates with `parseAlertRule` in
+        `types/index.ts`.
+      required: [type]
+      properties:
+        type:
+          $ref: '#/components/schemas/AlertRuleType'
+        enabled:
+          type: boolean
+          description: Whether the rule is active. Absent = true.
+        threshold_xlm:
+          type: number
+          description: Transfer size (XLM) that triggers a `LargeTransfer` rule.
+        function_name:
+          type: string
+          description: Function that triggers a `FunctionCalled` rule.
+        function_names:
+          type: array
+          description: Functions that trigger an `AdminFunctionCalled` rule.
+          items:
+            type: string
+
+    WatchedContract:
+      type: object
+      description: A contract the dashboard watches, mirroring the client's `WatchedContract`.
+      required:
+        - id
+        - label
+        - contract_id
+        - network
+        - rules
+        - webhook_url
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          description: Client-side identifier (`<contract_id>:<network>` by default).
+        label:
+          type: string
+          description: Human-readable name shown in the dashboard.
+        contract_id:
+          type: string
+          description: The contract's on-chain id (C... strkey).
+        network:
+          $ref: '#/components/schemas/Network'
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/AlertRule'
+        webhook_url:
+          type: string
+          format: uri
+          description: HTTPS endpoint alerts are delivered to.
+        webhook_secret:
+          type: string
+          description: Optional HMAC-SHA256 secret used to sign webhook deliveries.
+        enabled:
+          type: boolean
+          description: Whether the contract is actively watched. Absent = true.
+        created_at:
+          type: integer
+          format: int64
+          description: Creation time, epoch milliseconds.
+        updated_at:
+          type: integer
+          format: int64
+          description: Last update time, epoch milliseconds.
+
+    AlertEnvelope:
+      type: object
+      description: Envelope form some cores return instead of a bare array.
+      required: [alerts]
+      properties:
+        alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/AlertPayload'
+
+    AlertPayload:
+      type: object
+      description: |
+        An alert delivered for a watched contract, mirroring the client's
+        `AlertPayload`. `timestamp` is epoch milliseconds and `horizon_link`
+        points at the network's Horizon instance.
+      required:
+        - label
+        - contract_id
+        - network
+        - rule_triggered
+        - transaction_hash
+        - timestamp
+        - horizon_link
+      properties:
+        label:
+          type: string
+        contract_id:
+          type: string
+        network:
+          type: string
+          description: The network the alert occurred on.
+        rule_triggered:
+          $ref: '#/components/schemas/AlertRuleType'
+        transaction_hash:
+          type: string
+          description: The triggering transaction hash (64 lowercase hex chars).
+        function_name:
+          type: string
+          description: Present for `FunctionCalled` / `AdminFunctionCalled` alerts.
+        amount:
+          type: number
+          description: Present for `LargeTransfer` alerts (XLM transferred).
+        timestamp:
+          type: integer
+          format: int64
+          description: When the alert occurred, epoch milliseconds.
+        horizon_link:
+          type: string
+          format: uri
+          description: Horizon URL for the transaction.
+        is_test:
+          type: boolean
+          description: True for simulated (test) deliveries.
+
+    ErrorBody:
+      type: object
+      description: |
+        Error envelope. Cores may return `{ "message": "..." }` or
+        `{ "error": "..." }`, or a plain-text body; `apiFetch` surfaces the
+        message and throws an `ApiError` carrying the HTTP status and any
+        `Retry-After` hint.
+      properties:
+        message:
+          type: string
+        error:
+          type: string

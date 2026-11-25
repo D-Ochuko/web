@@ -26,6 +26,7 @@ export default function ContractImportExport() {
   const [mode, setMode] = useState<ImportMode>('merge')
   const [dupes, setDupes] = useState<DuplicateStrategy>('skip')
   const [exportMode, setExportMode] = useState<ExportMode>('contracts')
+  const [includeSecrets, setIncludeSecrets] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [failures, setFailures] = useState<string[]>([])
   const [confirmReplace, setConfirmReplace] = useState(false)
@@ -46,7 +47,7 @@ export default function ContractImportExport() {
             gatherSettings(),
             exportAllStorageData()
           )
-        : buildSnapshot(contracts)
+        : buildSnapshot(contracts, { includeSecrets })
     const json = JSON.stringify(payload, null, 2)
     const url = URL.createObjectURL(
       new Blob([json], { type: 'application/json' })
@@ -55,8 +56,8 @@ export default function ContractImportExport() {
     a.href = url
     a.download =
       exportMode === 'everything'
-        ? 'txwatch-backup.json'
-        : 'txwatch-contracts.json'
+        ? `txwatch-backup-${new Date().toISOString().slice(0, 10)}.json`
+        : `txwatch-contracts-${new Date().toISOString().slice(0, 10)}.json`
     a.click()
     setTimeout(() => URL.revokeObjectURL(url), 0)
   }
@@ -82,8 +83,10 @@ export default function ContractImportExport() {
     }
   }
 
+  const existingContracts = parsed ? getContracts() : []
+  const existingById = new Map(existingContracts.map((x) => [x.id, x]))
   const plan = parsed
-    ? planImport(getContracts(), parsed.contracts, mode, dupes)
+    ? planImport(existingContracts, parsed.contracts, mode, dupes)
     : null
 
   async function handleApply() {
@@ -99,6 +102,7 @@ export default function ContractImportExport() {
       // Replace: re-key alerts for contracts matched by (contract_id, network)
       // instead of letting deleteContract cascade-delete them.
       const existing = getContracts()
+      const existingIds = new Set(existing.map((c) => c.id))
       const toDelete = plan.toDeleteIds.filter(
         (id) => !plan.toSave.some((c) => c.id === id)
       )
@@ -128,7 +132,7 @@ export default function ContractImportExport() {
 
       for (const contract of plan.toSave) {
         try {
-          await syncSaveContract(contract)
+          await syncSaveContract(contract, !existingIds.has(contract.id))
         } catch (err) {
           errors.push(
             `Save ${contract.contract_id}: ${err instanceof Error ? err.message : 'sync failed'}`
@@ -167,6 +171,14 @@ export default function ContractImportExport() {
             <option value="everything">Everything</option>
           </select>
         </label>
+        <label className="flex items-center gap-2 text-sm text-zinc-400">
+          <input
+            type="checkbox"
+            checked={includeSecrets}
+            onChange={(e) => setIncludeSecrets(e.target.checked)}
+          />
+          Include signing secrets
+        </label>
         <button
           onClick={handleExport}
           className="px-3 py-1.5 rounded bg-indigo-600 text-white text-sm"
@@ -174,6 +186,12 @@ export default function ContractImportExport() {
           Export
         </button>
       </div>
+      {!includeSecrets && (
+        <p className="text-xs text-amber-400">
+          Webhook signing secrets are excluded from the export. You will need to
+          re-enter them after importing.
+        </p>
+      )}
       <div>
         <label
           className="block text-sm text-zinc-400 mb-1"
@@ -199,6 +217,12 @@ export default function ContractImportExport() {
           <p>
             {parsed.contracts.length} valid, {parsed.errors.length} invalid,{' '}
             {plan.duplicates.length} duplicate.
+            {parsed.alerts !== undefined &&
+              ` ${parsed.alerts.length} alert(s) to restore, ${parsed.skippedAlerts ?? 0} skipped.`}
+          </p>
+          <p className="text-amber-400">
+            Imported contracts do not include webhook signing secrets. Re-enter
+            them for each contract after importing.
           </p>
           {plan.toSave.length > 0 && (
             <div>
@@ -217,7 +241,7 @@ export default function ContractImportExport() {
               <p className="text-zinc-400">To delete:</p>
               <ul className="list-disc pl-5 text-red-400">
                 {plan.toDeleteIds.map((id) => {
-                  const c = getContracts().find((x) => x.id === id)
+                  const c = existingById.get(id)
                   return (
                     <li key={id}>
                       {c ? `${c.contract_id} (${c.network})` : id}
@@ -252,46 +276,4 @@ export default function ContractImportExport() {
               Duplicates{' '}
               <select
                 value={dupes}
-                onChange={(e) => setDupes(e.target.value as DuplicateStrategy)}
-                className="bg-zinc-900"
-              >
-                <option value="skip">Skip</option>
-                <option value="overwrite">Overwrite</option>
-              </select>
-            </label>
-          )}
-          {mode === 'replace' && confirmReplace && (
-            <p className="text-amber-400">
-              Replace all existing contracts? This will delete the contracts
-              listed above.
-            </p>
-          )}
-          <button
-            onClick={handleApply}
-            disabled={
-              applying ||
-              (plan.toSave.length === 0 && plan.toDeleteIds.length === 0)
-            }
-            className="px-3 py-1.5 rounded bg-indigo-600 text-white disabled:opacity-50"
-          >
-            {mode === 'replace' && confirmReplace
-              ? 'Confirm replace'
-              : 'Apply import'}
-          </button>
-        </div>
-      )}
-      {message && (
-        <p role="status" className="text-sm text-zinc-300">
-          {message}
-        </p>
-      )}
-      {failures.length > 0 && (
-        <ul className="text-sm text-red-400 list-disc pl-5">
-          {failures.map((f, i) => (
-            <li key={i}>{f}</li>
-          ))}
-        </ul>
-      )}
-    </section>
-  )
-}
+                onChange={(e) => setDupes(e.target.value as DuplicateStrategy

@@ -36,6 +36,10 @@ test('production pages load without Content Security Policy violations', async (
     expect(policy).toContain("style-src 'self' 'unsafe-inline'")
     expect(policy).toContain("img-src 'self' data:")
     expect(policy).toContain("font-src 'self'")
+    expect(policy).toContain("base-uri 'self'")
+    expect(policy).toContain("object-src 'none'")
+    expect(policy).toContain("form-action 'self'")
+    expect(policy).toContain("frame-ancestors 'none'")
   }
 
   expect(cspConsoleErrors).toEqual([])

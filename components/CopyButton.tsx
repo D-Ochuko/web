@@ -9,6 +9,8 @@ interface CopyButtonProps {
   /** Accessible label for screen readers. Defaults to "Copy to clipboard". */
   'aria-label'?: string
   className?: string
+  /** Disables the button and skips the copy, e.g. when there is no text yet. */
+  disabled?: boolean
 }
 
 /**
@@ -24,6 +26,7 @@ export default function CopyButton({
   text,
   'aria-label': ariaLabel = 'Copy to clipboard',
   className = '',
+  disabled = false,
 }: CopyButtonProps) {
   const [copyState, setCopyState] = useState<CopyState>('idle')
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -38,6 +41,7 @@ export default function CopyButton({
   }, [])
 
   async function copy() {
+    if (disabled) return
     // Clear any running timer before starting a new copy
     if (timeoutRef.current !== null) {
       clearTimeout(timeoutRef.current)
@@ -102,8 +106,9 @@ export default function CopyButton({
       <button
         type="button"
         onClick={copy}
+        disabled={disabled}
         aria-label={ariaLabel}
-        className={`text-zinc-500 hover:text-zinc-300 transition-colors ${className}`}
+        className={`text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-50 disabled:pointer-events-none ${className}`}
       >
         {copyState === 'copied' ? (
           // Success icon

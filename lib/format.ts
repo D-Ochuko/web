@@ -1,5 +1,6 @@
 import { AlertRule } from '@/types'
 import { getRuleMeta } from '@/lib/ruleMeta'
+import { AlertRule, largeTransferAssetLabel } from '@/types'
 
 /**
  * Shared formatting helpers for dates used across the app.
@@ -121,6 +122,7 @@ export function formatRuleSummary(rule: AlertRule): string {
   switch (rule.type) {
     case 'LargeTransfer':
       return `> ${formatThresholdXlm(rule.threshold_xlm)} XLM`
+      return `> ${rule.threshold_xlm.toLocaleString()} ${largeTransferAssetLabel(rule)}`
     case 'FunctionCalled':
       return rule.function_name || 'function'
     case 'AdminFunctionCalled':
@@ -134,4 +136,23 @@ export function formatRuleSummary(rule: AlertRule): string {
 /** Rule label plus summary (e.g. "Large Transfer > 10,000 XLM") for unique accessible names. */
 export function formatRuleAccessibleName(rule: AlertRule): string {
   return `${getRuleMeta(rule.type).label} ${formatRuleSummary(rule)}`.trim()
+/**
+ * Formats an XLM amount for display (e.g. "1,234.5 XLM").
+ *
+ * Accepts either a numeric amount or a string (as returned by the API) and
+ * falls back to the raw value when it cannot be parsed as a number.
+ */
+export function formatAmount(
+  amount: number | string | null | undefined
+): string {
+  if (amount === null || amount === undefined || amount === '') {
+    return '—'
+  }
+
+  const value = typeof amount === 'number' ? amount : Number(amount)
+  if (!Number.isFinite(value)) {
+    return `${amount} XLM`
+  }
+
+  return `${value.toLocaleString(undefined, { maximumFractionDigits: 7 })} XLM`
 }

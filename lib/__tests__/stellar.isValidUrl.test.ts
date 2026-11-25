@@ -42,44 +42,91 @@ describe('isValidUrl', () => {
     // The URL constructor strips surrounding whitespace, so these are treated as valid
     expect(isValidUrl('  https://example.com  ')).toBe(true)
   })
+
+  // #506: reject localhost/private/link-local hosts to avoid SSRF when fetched server-side
+  it('rejects localhost hostname', () => {
+    expect(isValidUrl('http://localhost:8000/webhook')).toBe(false)
+  })
+
+  it('rejects IPv4 loopback 127.0.0.1', () => {
+    expect(isValidUrl('http://127.0.0.1/')).toBe(false)
+  })
+
+  it('rejects IPv6 loopback [::1]', () => {
+    expect(isValidUrl('http://[::1]/')).toBe(false)
+  })
+
+  it('rejects private IP range 10.x.x.x', () => {
+    expect(isValidUrl('http://10.0.0.1/')).toBe(false)
+  })
+
+  it('rejects private IP range 192.168.x.x', () => {
+    expect(isValidUrl('http://192.168.1.1/')).toBe(false)
+  })
+
+  it('rejects link-local metadata endpoint 169.254.169.254', () => {
+    expect(isValidUrl('http://169.254.169.254/latest/meta-data/')).toBe(false)
+  })
+
+  it('still accepts public hosts', () => {
+    expect(isValidUrl('https://example.com/webhook')).toBe(true)
+  })
 })
 
 // #117: Webhook URL validation tests
 describe('validateWebhookUrl', () => {
   it('accepts a valid https URL', () => {
-    expect(validateWebhookUrl('https://api.example.com/webhook', 'mainnet')).toBe(null)
+    expect(
+      validateWebhookUrl('https://api.example.com/webhook', 'mainnet')
+    ).toBe(null)
   })
 
   it('rejects URLs with embedded credentials', () => {
-    expect(validateWebhookUrl('https://user:pass@example.com/webhook', 'mainnet')).toBe('credentials_in_url')
+    expect(
+      validateWebhookUrl('https://user:pass@example.com/webhook', 'mainnet')
+    ).toBe('credentials_in_url')
   })
 
   it('blocks plain http on mainnet', () => {
-    expect(validateWebhookUrl('http://example.com/webhook', 'mainnet')).toBe('http_on_mainnet')
+    expect(validateWebhookUrl('http://example.com/webhook', 'mainnet')).toBe(
+      'http_on_mainnet'
+    )
   })
 
   it('warns on plain http for testnet', () => {
-    expect(validateWebhookUrl('http://example.com/webhook', 'testnet')).toBe('http_warning')
+    expect(validateWebhookUrl('http://example.com/webhook', 'testnet')).toBe(
+      'http_warning'
+    )
   })
 
   it('rejects localhost addresses', () => {
-    expect(validateWebhookUrl('http://localhost:8000/webhook', 'testnet')).toBe('loopback_not_allowed')
+    expect(validateWebhookUrl('http://localhost:8000/webhook', 'testnet')).toBe(
+      'loopback_not_allowed'
+    )
   })
 
   it('rejects 127.0.0.1', () => {
-    expect(validateWebhookUrl('http://127.0.0.1:8000/webhook', 'testnet')).toBe('loopback_not_allowed')
+    expect(validateWebhookUrl('http://127.0.0.1:8000/webhook', 'testnet')).toBe(
+      'loopback_not_allowed'
+    )
   })
 
   it('rejects private IP range 10.x.x.x', () => {
-    expect(validateWebhookUrl('http://10.0.0.1/webhook', 'testnet')).toBe('private_ip_not_allowed')
+    expect(validateWebhookUrl('http://10.0.0.1/webhook', 'testnet')).toBe(
+      'private_ip_not_allowed'
+    )
   })
 
   it('rejects private IP range 192.168.x.x', () => {
-    expect(validateWebhookUrl('http://192.168.1.1/webhook', 'testnet')).toBe('private_ip_not_allowed')
+    expect(validateWebhookUrl('http://192.168.1.1/webhook', 'testnet')).toBe(
+      'private_ip_not_allowed'
+    )
   })
 
   it('rejects link-local 169.254.x.x', () => {
-    expect(validateWebhookUrl('http://169.254.1.1/webhook', 'testnet')).toBe('link_local_not_allowed')
+    expect(validateWebhookUrl('http://169.254.1.1/webhook', 'testnet')).toBe(
+      'link_local_not_allowed'
+    )
   })
 
   it('rejects invalid URLs', () => {
