@@ -1,7 +1,5 @@
 import { isValidContractId, validateWebhookUrl } from '@/lib/stellar'
-import { isValidContractId, isValidUrl } from '@/lib/stellar'
 import { parseAlertRule } from '@/lib/rules'
-import { AlertRule, Network, WatchedContract } from '@/types'
 import type { AlertRule, Network, WatchedContract } from '@/types'
 
 const DUPLICATE_CONTRACT_KEY = 'txwatch_duplicate_contract'
@@ -75,7 +73,8 @@ function validateWebhookUrlField(
 ): { error?: string; warning?: string } {
   const result = validateWebhookUrl(url, network)
   if (result.valid) return {}
-  const message = WEBHOOK_URL_MESSAGES[result.code] ?? 'Must be a valid http/https URL'
+  const message =
+    WEBHOOK_URL_MESSAGES[result.code] ?? 'Must be a valid http/https URL'
   if (result.code === 'http_warning') return { warning: message }
   return { error: message }
 }
@@ -118,7 +117,8 @@ function validateForm({
   if (!trimmedContractId) {
     e.contract_id = 'Contract ID is required'
   } else if (!isValidContractId(trimmedContractId)) {
-    e.contract_id = 'Must be a valid Soroban contract address (starts with C, 56 chars)'
+    e.contract_id =
+      'Must be a valid Soroban contract address (starts with C, 56 chars)'
   } else {
     const isDuplicate = existingContracts.some(
       (c) => c.contract_id === trimmedContractId && c.network === network
@@ -147,7 +147,8 @@ function isFormValid(params: Parameters<typeof validateForm>[0]): boolean {
 }
 
 describe('NewContract form validation (#14)', () => {
-  const validContractId = 'CDSO4GGZH7KBUQYKOIQDCMCFSRYEPOVDUX7Z4IB5TWNTLT2GDRKDQOYR'
+  const validContractId =
+    'CDSO4GGZH7KBUQYKOIQDCMCFSRYEPOVDUX7Z4IB5TWNTLT2GDRKDQOYR'
   const validRule: AlertRule = { type: 'AnyTransaction' }
 
   it('asserts label error is visible when empty or too long', () => {
@@ -221,7 +222,9 @@ describe('NewContract form validation (#14)', () => {
       rules: [validRule],
       existingContracts: [existing],
     })
-    expect(dupRes.contract_id).toBe('This contract is already registered on testnet')
+    expect(dupRes.contract_id).toBe(
+      'This contract is already registered on testnet'
+    )
 
     // Same contract ID on a different network is permitted
     const diffNetRes = validateForm({
@@ -277,7 +280,9 @@ describe('NewContract form validation (#14)', () => {
     const res = validateForm(params)
     expect(res.webhook_url).toBeUndefined()
     expect(isFormValid(params)).toBe(true)
-    expect(validateWebhookUrlField('http://example.com/hook', 'mainnet')).toEqual({
+    expect(
+      validateWebhookUrlField('http://example.com/hook', 'mainnet')
+    ).toEqual({
       warning: 'Use HTTPS for webhooks on mainnet',
     })
   })
@@ -290,7 +295,9 @@ describe('NewContract form validation (#14)', () => {
       webhookUrl: 'http://127.0.0.1/hook',
       rules: [validRule],
     })
-    expect(res.webhook_url).toBe('Webhook URL must not point to a loopback address')
+    expect(res.webhook_url).toBe(
+      'Webhook URL must not point to a loopback address'
+    )
   })
 
   it('maps private_address to an error', () => {
@@ -310,7 +317,9 @@ describe('NewContract form validation (#14)', () => {
       webhookUrl: 'https://10.0.0.5/hook',
       rules: [validRule],
     })
-    expect(privateRes.webhook_url).toBe('Webhook URL must not point to a private address')
+    expect(privateRes.webhook_url).toBe(
+      'Webhook URL must not point to a private address'
+    )
   })
 
   it('asserts rules error is visible when no rules are configured', () => {
@@ -340,7 +349,8 @@ describe('NewContract form validation (#14)', () => {
 })
 
 describe('NewContract save flow (#194)', () => {
-  const validContractId = 'CDSO4GGZH7KBUQYKOIQDCMCFSRYEPOVDUX7Z4IB5TWNTLT2GDRKDQOYR'
+  const validContractId =
+    'CDSO4GGZH7KBUQYKOIQDCMCFSRYEPOVDUX7Z4IB5TWNTLT2GDRKDQOYR'
   const validRule: AlertRule = { type: 'AnyTransaction' }
 
   function makeHarness() {
@@ -356,7 +366,13 @@ describe('NewContract save flow (#194)', () => {
       return { ...localResult, synced: true }
     })
     const addContract = jest.fn(async (contract: WatchedContract) => {
-      if (stored.some((c) => c.contract_id === contract.contract_id && c.network === contract.network)) {
+      if (
+        stored.some(
+          (c) =>
+            c.contract_id === contract.contract_id &&
+            c.network === contract.network
+        )
+      ) {
         throw new Error('DuplicateContractError')
       }
       stored.push(contract)
@@ -386,7 +402,14 @@ describe('NewContract save flow (#194)', () => {
       return { result }
     }
 
-    return { stored, redirect, saveContract, syncSaveContract, addContract, handleSave }
+    return {
+      stored,
+      redirect,
+      saveContract,
+      syncSaveContract,
+      addContract,
+      handleSave,
+    }
   }
 
   it('saves a valid contract once and redirects', async () => {
@@ -410,7 +433,10 @@ describe('NewContract save flow (#194)', () => {
 
   it('returns the local save result so the storage-full toast still works', async () => {
     const h = makeHarness()
-    h.saveContract.mockResolvedValueOnce({ ok: false as const, reason: 'storage_full' })
+    h.saveContract.mockResolvedValueOnce({
+      ok: false as const,
+      reason: 'storage_full',
+    })
 
     const { result } = await h.handleSave({
       label: 'Valid Contract',
@@ -421,8 +447,12 @@ describe('NewContract save flow (#194)', () => {
     })
 
     expect(result).toEqual({ ok: false, reason: 'storage_full', synced: true })
+  })
+})
+
 describe('Duplicate contract prefill (#200)', () => {
-  const validContractId = 'CDSO4GGZH7KBUQYKOIQDCMCFSRYEPOVDUX7Z4IB5TWNTLT2GDRKDQOYR'
+  const validContractId =
+    'CDSO4GGZH7KBUQYKOIQDCMCFSRYEPOVDUX7Z4IB5TWNTLT2GDRKDQOYR'
 
   it('populates the form from valid prefill data', () => {
     const raw = JSON.stringify({
@@ -430,7 +460,10 @@ describe('Duplicate contract prefill (#200)', () => {
       contract_id: validContractId,
       network: 'mainnet',
       webhook_url: 'https://example.com/hook',
-      rules: [{ type: 'AnyTransaction' }, { type: 'LargeTransfer', threshold: '1000' }],
+      rules: [
+        { type: 'AnyTransaction' },
+        { type: 'LargeTransfer', threshold: '1000' },
+      ],
     })
 
     const prefill = readDuplicatePrefill(raw)

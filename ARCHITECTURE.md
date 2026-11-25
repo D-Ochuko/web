@@ -158,3 +158,12 @@ Most changes flow from types → logic → components → pages. When adding a f
 2. Add logic to `lib/stellar.ts` or `lib/api.ts`
 3. Create/update components in `/components`
 4. Wire into pages in `/app`
+
+## Stellar SDK usage
+
+`@stellar/stellar-sdk` is a runtime dependency, not just types. It is used in two places:
+
+- `lib/stellar.ts` validates contract IDs with `StrKey.isValidContract` rather than a hand-written regex.
+- `lib/contractExists.ts` builds Soroban ledger keys with `Address` and `xdr` to check that a contract exists on the selected network.
+
+Keep new address and key validation on the SDK's `StrKey` helpers so the app stays in step with the protocol's encoding rules.

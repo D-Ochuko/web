@@ -236,7 +236,9 @@ import { useWalletState } from '@/hooks/useWalletState'
 const { publicKey, initialized, publish } = useWalletState()
 ```
 
-`publish(key)` connects and `publish(null)` disconnects; both update `localStorage` and `window.__freighterPublicKey` and notify every other subscriber.
+`publish(key)` connects and `publish(null)` disconnects; it broadcasts the change
+to every wallet-aware subscriber via the `txwatch:wallet` event. Nothing is
+persisted to `localStorage` or `window`.
 
 To sign and submit a transaction:
 

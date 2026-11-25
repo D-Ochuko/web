@@ -2,10 +2,13 @@
 
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from 'react'
 import { AlertRule, AlertRuleType, isRuleEnabled } from '@/types'
+import { isValidContractId } from '@/lib/stellar'
 import { formatRuleSummary } from '@/lib/format'
 import { MAX_XLM_DECIMALS, validateThreshold } from '@/lib/formatAmount'
 import { getRuleMeta } from '@/lib/ruleMeta'
+import { findOverlappingRule } from '@/lib/ruleOverlap'
 import { isValidFunctionName, sanitizeAdminFunctionNames } from '@/lib/soroban'
+import { MAX_RULES_PER_CONTRACT } from '@/lib/storage'
 import AlertRuleBadge from './AlertRuleBadge'
 
 const RULE_TYPES: AlertRuleType[] = [
@@ -48,6 +51,12 @@ function formatXlm(value: number): string {
   })
 }
 
+/** Plain decimal string (no exponent notation) with trailing zeros trimmed. */
+function plainDecimal(value: number): string {
+  const fixed = value.toFixed(MAX_XLM_DECIMALS)
+  return fixed.includes('.') ? fixed.replace(/\.?0+$/, '') : fixed
+}
+
 function parseFunctionNames(raw: string): string[] {
   return raw
     .split(',')
@@ -55,11 +64,16 @@ function parseFunctionNames(raw: string): string[] {
     .filter(Boolean)
 }
 
-/** Key identifying a rule's configuration, ignoring the enabled flag. */
+/** Key identifying a rule's configuration, ignoring the enabled flag.
+ *
+ * Soroban function names are case-sensitive symbols, so "transfer" and
+ * "Transfer" are distinct rules. No case normalization is applied here —
+ * the caller is responsible for using the exact casing from the contract.
+ */
 function ruleKey(rule: AlertRule): string {
   switch (rule.type) {
     case 'LargeTransfer':
-      return `${rule.type}:${rule.threshold_xlm}`
+      return `${rule.type}:${rule.threshold_xlm}:${rule.asset?.trim() ?? 'XLM'}`
     case 'FunctionCalled':
       return `${rule.type}:${rule.function_name.trim()}`
     case 'AdminFunctionCalled':
@@ -90,6 +104,8 @@ export default function RuleBuilder({
   // Draft fields are held as raw text per type, so switching type never leaves stale fields.
   const [draftType, setDraftType] = useState<AlertRuleType>('AnyTransaction')
   const [thresholdText, setThresholdText] = useState('')
+  const [assetText, setAssetText] = useState('XLM')
+  const [decimalsText, setDecimalsText] = useState('')
   const [functionName, setFunctionName] = useState('')
   const [functionNamesText, setFunctionNamesText] = useState('')
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
@@ -107,10 +123,14 @@ export default function RuleBuilder({
   const thresholdHintId = `${idPrefix}-threshold-hint`
   const errorId = `${idPrefix}-error`
   const warningId = `${idPrefix}-warning`
-  const thresholdDescribedBy = [error ? errorId : null, thresholdHintId].filter(Boolean).join(' ')
+  const thresholdDescribedBy = [error ? errorId : null, thresholdHintId]
+    .filter(Boolean)
+    .join(' ')
   const functionNameDescribedBy = error ? errorId : undefined
   const functionNamesDescribedBy = error ? errorId : undefined
-  const typeDescribedBy = [error ? errorId : null, typeHintId].filter(Boolean).join(' ')
+  const typeDescribedBy = [error ? errorId : null, typeHintId]
+    .filter(Boolean)
+    .join(' ')
 
   useEffect(() => {
     if (!showPresets) return
@@ -135,6 +155,8 @@ export default function RuleBuilder({
   function resetDraft() {
     setDraftType('AnyTransaction')
     setThresholdText('')
+    setAssetText('XLM')
+    setDecimalsText('')
     setFunctionName('')
     setFunctionNamesText('')
     clearMessages()
@@ -143,6 +165,8 @@ export default function RuleBuilder({
   function handleTypeChange(type: AlertRuleType) {
     setDraftType(type)
     setThresholdText('')
+    setAssetText('XLM')
+    setDecimalsText('')
     setFunctionName('')
     setFunctionNamesText('')
     clearMessages()
@@ -169,7 +193,31 @@ export default function RuleBuilder({
           setError(result.error)
           return null
         }
-        return { type: 'LargeTransfer', threshold_xlm: result.value }
+        const asset = assetText.trim()
+        if (!asset || asset.toUpperCase() === 'XLM') {
+          return { type: 'LargeTransfer', threshold_xlm: result.value }
+        }
+        if (!/^[A-Za-z0-9]{1,12}$/.test(asset) && !isValidContractId(asset)) {
+          setError(
+            'Asset must be a code (1-12 letters/digits) or a token contract ID'
+          )
+          return null
+        }
+        const decimals =
+          decimalsText.trim() === '' ? undefined : Number(decimalsText)
+        if (
+          decimals !== undefined &&
+          (!Number.isInteger(decimals) || decimals < 0 || decimals > 18)
+        ) {
+          setError('Decimals must be a whole number from 0 to 18')
+          return null
+        }
+        return {
+          type: 'LargeTransfer',
+          threshold_xlm: result.value,
+          asset,
+          ...(decimals !== undefined ? { decimals } : {}),
+        }
       }
       case 'FunctionCalled': {
         const name = functionName.trim()
@@ -196,9 +244,11 @@ export default function RuleBuilder({
           setError(`Invalid function names: ${invalid.join(', ')}`)
           return null
         }
+        // Build a local copy and sort it — never mutates the source array or any draft state.
+        const sortedNames = [...valid].sort()
         return {
           type: 'AdminFunctionCalled',
-          function_names: [...valid].sort(),
+          function_names: sortedNames,
         }
       }
       case 'AnyTransaction':
@@ -216,6 +266,7 @@ export default function RuleBuilder({
         functionNamesInputRef.current?.focus()
       return
     }
+    const overlap = findOverlappingRule(built, rules, editingIndex)
     if (editingIndex !== null) {
       if (isDuplicate(built, rules, editingIndex)) {
         setWarning('This rule already exists')
@@ -232,6 +283,12 @@ export default function RuleBuilder({
       onRulesChanged?.(updated, 'update')
       setEditingIndex(null)
     } else {
+      if (rules.length >= MAX_RULES_PER_CONTRACT) {
+        setError(
+          `Maximum of ${MAX_RULES_PER_CONTRACT} rules per contract. Remove some rules before adding more.`
+        )
+        return
+      }
       if (isDuplicate(built, rules)) {
         setWarning('This rule already exists')
         return
@@ -241,6 +298,12 @@ export default function RuleBuilder({
       onRulesChanged?.(updated, 'add')
     }
     resetDraft()
+    // Non-blocking: the rule is saved, but tell the user it overlaps another (#446)
+    if (overlap) {
+      setWarning(
+        `Added, but this overlaps with existing rule "${[getRuleMeta(overlap.type).label, formatRuleSummary(overlap)].filter(Boolean).join(': ')}" - the same transaction may trigger both alerts`
+      )
+    }
   }
 
   function applyPreset(presetRules: AlertRule[]) {
@@ -255,6 +318,12 @@ export default function RuleBuilder({
       setWarning('These rules already exist')
       return
     }
+    if (rules.length + toAdd.length > MAX_RULES_PER_CONTRACT) {
+      setError(
+        `Maximum of ${MAX_RULES_PER_CONTRACT} rules per contract. This preset would add ${toAdd.length} rule(s), exceeding the limit.`
+      )
+      return
+    }
     const updated = [...rules, ...toAdd]
     onChange(updated)
     onRulesChanged?.(updated, 'add')
@@ -264,7 +333,13 @@ export default function RuleBuilder({
     const rule = rules[index]
     setDraftType(rule.type)
     setThresholdText(
-      rule.type === 'LargeTransfer' ? String(rule.threshold_xlm) : ''
+      rule.type === 'LargeTransfer' ? plainDecimal(rule.threshold_xlm) : ''
+    )
+    setAssetText(rule.type === 'LargeTransfer' ? (rule.asset ?? 'XLM') : 'XLM')
+    setDecimalsText(
+      rule.type === 'LargeTransfer' && rule.decimals !== undefined
+        ? String(rule.decimals)
+        : ''
     )
     setFunctionName(rule.type === 'FunctionCalled' ? rule.function_name : '')
     setFunctionNamesText(
@@ -361,7 +436,9 @@ export default function RuleBuilder({
               </option>
             ))}
           </select>
-          <p id={typeHintId} className="text-xs text-zinc-500 mt-1">{getRuleMeta(draftType).description}</p>
+          <p id={typeHintId} className="text-xs text-zinc-500 mt-1">
+            {getRuleMeta(draftType).description}
+          </p>
           <p className="text-xs text-zinc-500 mt-1">
             {getRuleMeta(draftType).description}
           </p>
@@ -373,7 +450,7 @@ export default function RuleBuilder({
               htmlFor={`${idPrefix}-threshold`}
               className="block text-xs font-medium text-zinc-400 mb-1"
             >
-              Threshold (XLM)
+              Threshold ({assetText.trim() || 'XLM'})
             </label>
             <input
               ref={thresholdInputRef}
@@ -393,8 +470,47 @@ export default function RuleBuilder({
             />
             {!isNaN(thresholdPreview) && (
               <p id={thresholdHintId} className="text-xs text-zinc-500 mt-1">
-                Threshold: {formatXlm(thresholdPreview)} XLM
+                Threshold: {formatXlm(thresholdPreview)}{' '}
+                {assetText.trim() || 'XLM'}
               </p>
+            )}
+            <label
+              htmlFor={`${idPrefix}-asset`}
+              className="block text-xs font-medium text-zinc-400 mt-2 mb-1"
+            >
+              Asset
+            </label>
+            <input
+              id={`${idPrefix}-asset`}
+              type="text"
+              list={`${idPrefix}-asset-options`}
+              placeholder="XLM, USDC, or token contract ID"
+              value={assetText}
+              onChange={(e) => {
+                setAssetText(e.target.value)
+                clearMessages()
+              }}
+              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-indigo-500"
+            />
+            <datalist id={`${idPrefix}-asset-options`}>
+              <option value="XLM" />
+              <option value="USDC" />
+            </datalist>
+            {assetText.trim() && assetText.trim().toUpperCase() !== 'XLM' && (
+              <input
+                aria-label="Asset decimals"
+                type="number"
+                min="0"
+                max="18"
+                step="1"
+                placeholder="Decimals (optional, e.g. 7)"
+                value={decimalsText}
+                onChange={(e) => {
+                  setDecimalsText(e.target.value)
+                  clearMessages()
+                }}
+                className="mt-2 w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-indigo-500"
+              />
             )}
           </div>
         )}
@@ -451,8 +567,16 @@ export default function RuleBuilder({
         )}
 
         <div id={messageId} aria-live="polite" aria-atomic="true">
-          {error && <p id={errorId} className="text-xs text-red-400">{error}</p>}
-          {warning && <p id={warningId} className="text-xs text-amber-400">{warning}</p>}
+          {error && (
+            <p id={errorId} className="text-xs text-red-400">
+              {error}
+            </p>
+          )}
+          {warning && (
+            <p id={warningId} className="text-xs text-amber-400">
+              {warning}
+            </p>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-2">
