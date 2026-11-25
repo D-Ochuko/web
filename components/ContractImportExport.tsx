@@ -102,6 +102,7 @@ export default function ContractImportExport() {
       // Replace: re-key alerts for contracts matched by (contract_id, network)
       // instead of letting deleteContract cascade-delete them.
       const existing = getContracts()
+      const existingIds = new Set(existing.map((c) => c.id))
       const toDelete = plan.toDeleteIds.filter(
         (id) => !plan.toSave.some((c) => c.id === id)
       )
@@ -131,7 +132,7 @@ export default function ContractImportExport() {
 
       for (const contract of plan.toSave) {
         try {
-          await syncSaveContract(contract)
+          await syncSaveContract(contract, !existingIds.has(contract.id))
         } catch (err) {
           errors.push(
             `Save ${contract.contract_id}: ${err instanceof Error ? err.message : 'sync failed'}`
@@ -275,46 +276,4 @@ export default function ContractImportExport() {
               Duplicates{' '}
               <select
                 value={dupes}
-                onChange={(e) => setDupes(e.target.value as DuplicateStrategy)}
-                className="bg-zinc-900"
-              >
-                <option value="skip">Skip</option>
-                <option value="overwrite">Overwrite</option>
-              </select>
-            </label>
-          )}
-          {mode === 'replace' && confirmReplace && (
-            <p className="text-amber-400">
-              Replace all existing contracts? This will delete the contracts
-              listed above.
-            </p>
-          )}
-          <button
-            onClick={handleApply}
-            disabled={
-              applying ||
-              (plan.toSave.length === 0 && plan.toDeleteIds.length === 0)
-            }
-            className="px-3 py-1.5 rounded bg-indigo-600 text-white disabled:opacity-50"
-          >
-            {mode === 'replace' && confirmReplace
-              ? 'Confirm replace'
-              : 'Apply import'}
-          </button>
-        </div>
-      )}
-      {message && (
-        <p role="status" className="text-sm text-zinc-300">
-          {message}
-        </p>
-      )}
-      {failures.length > 0 && (
-        <ul className="text-sm text-red-400 list-disc pl-5">
-          {failures.map((f, i) => (
-            <li key={i}>{f}</li>
-          ))}
-        </ul>
-      )}
-    </section>
-  )
-}
+                onChange={(e) => setDupes(e.target.value as DuplicateStrategy
