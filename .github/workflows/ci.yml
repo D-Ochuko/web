@@ -44,13 +44,17 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
+      # Fails the job on high or critical advisories so a vulnerable dependency
+      # cannot merge unnoticed. Dependabot (.github/dependabot.yml) opens the
+      # fix PRs; if an advisory has no fix yet, document the exception in the PR.
       - name: Validate OpenAPI fixtures against the contract
         run: npm run test:openapi
 
       - name: Audit dependencies
         run: npm audit --audit-level=high
-        continue-on-error: true
 
+      # Runs the whole vitest suite (with coverage). A failing test fails this
+      # job, which is a required status check on `main`.
       - name: Test with coverage
         id: coverage
         run: npm run test:coverage
