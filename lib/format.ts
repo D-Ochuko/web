@@ -111,10 +111,15 @@ export function formatRelativeTime(
  * The LargeTransfer operator matches tx-watch-core, which fires when a
  * transfer strictly exceeds the threshold (amount > threshold_xlm).
  */
+/** Formats an XLM threshold with grouping, keeping up to 7 decimals (stroop precision). */
+export function formatThresholdXlm(value: number): string {
+  return value.toLocaleString(undefined, { maximumFractionDigits: 7 })
+}
+
 export function formatRuleSummary(rule: AlertRule): string {
   switch (rule.type) {
     case 'LargeTransfer':
-      return `> ${rule.threshold_xlm.toLocaleString()} XLM`
+      return `> ${formatThresholdXlm(rule.threshold_xlm)} XLM`
     case 'FunctionCalled':
       return rule.function_name || 'function'
     case 'AdminFunctionCalled':

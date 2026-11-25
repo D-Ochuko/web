@@ -1,5 +1,6 @@
 import { horizonUrl, isValidContractId } from '@/lib/stellar'
 import { SIGNATURE_HEADER, signWebhookPayload } from './webhookSignature'
+import { formatThresholdXlm } from './format'
 import { sanitizeBodySnippet } from './bodySnippet'
 import { getAuthorizationHeader, notifyAuthRequired } from './apiAuth'
 import type { AlertPayload, AlertRule, Network } from '@/types'
@@ -146,7 +147,7 @@ export const TEST_CONTRACT_ID =
 export function describeRule(rule: AlertRule): string {
   switch (rule.type) {
     case 'LargeTransfer':
-      return `${rule.type} (over ${rule.threshold_xlm} XLM)`
+      return `${rule.type} (over ${formatThresholdXlm(rule.threshold_xlm)} XLM)`
     case 'FunctionCalled':
       return `${rule.type} (${rule.function_name.trim()})`
     case 'AdminFunctionCalled':
