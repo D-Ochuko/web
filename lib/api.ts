@@ -60,6 +60,34 @@ export function parseRetryAfter(
   return Number.isNaN(date) ? undefined : Math.max(0, date - now)
 }
 
+/**
+ * Extract a human-readable message from a parsed error body. Handles plain
+ * `message`/`error` strings, nested `error.message`, `errors[0].message`, and
+ * RFC 7807 `detail`. Returns `undefined` when no string message is found.
+ */
+export function extractErrorMessage(body: unknown): string | undefined {
+  if (typeof body === 'string') return body || undefined
+  if (!body || typeof body !== 'object') return undefined
+  const obj = body as Record<string, unknown>
+  if (typeof obj.message === 'string' && obj.message) return obj.message
+  if (typeof obj.error === 'string' && obj.error) return obj.error
+  if (obj.error && typeof obj.error === 'object') {
+    const nested = (obj.error as Record<string, unknown>).message
+    if (typeof nested === 'string' && nested) return nested
+  }
+  if (Array.isArray(obj.errors)) {
+    const first = obj.errors[0]
+    if (first && typeof first === 'object') {
+      const nested = (first as Record<string, unknown>).message
+      if (typeof nested === 'string' && nested) return nested
+    } else if (typeof first === 'string' && first) {
+      return first
+    }
+  }
+  if (typeof obj.detail === 'string' && obj.detail) return obj.detail
+  return undefined
+}
+
 export async function apiFetch<T>(
   path: string,
   options?: RequestInit & { timeoutMs?: number }
@@ -97,7 +125,7 @@ export async function apiFetch<T>(
       if (text) {
         try {
           const body = JSON.parse(text)
-          message = body?.message || body?.error || text
+          message = extractErrorMessage(body) ?? text
         } catch {
           message = text
         }
@@ -111,6 +139,10 @@ export async function apiFetch<T>(
     }
 
     if (res.status === 204) return undefined as T
+    const contentType = res.headers?.get('content-type') ?? ''
+    if (!/\bapplication\/(?:[\w.+-]*\+)?json\b/i.test(contentType)) {
+      throw new ApiError('API returned non-JSON response', res.status)
+    }
     const text = await res.text()
     if (!text) return undefined as T
     return JSON.parse(text) as T
@@ -126,6 +158,15 @@ export async function apiFetch<T>(
     clearTimeout(timeoutId)
     init.signal?.removeEventListener('abort', onCallerAbort)
   }
+}
+
+/**
+ * Cheap authenticated endpoint used by the Settings "Test connection" action
+ * to validate the currently stored API key. Resolves on success and throws an
+ * `ApiError` (e.g. 401) when the key is missing or rejected.
+ */
+export async function testApiConnection(): Promise<void> {
+  await apiFetch<unknown>('/auth/me', { timeoutMs: 8000 })
 }
 
 /** Result of a test webhook delivery: the HTTP status and whether it succeeded. */
@@ -206,16 +247,23 @@ export function buildTestWebhookPayload({
   timestamp = Date.now(),
   transactionHash = TEST_TX_HASH,
 }: BuildTestWebhookPayloadOptions): AlertPayload {
+  const triggered = rule?.type ?? 'AnyTransaction'
   const payload: AlertPayload = {
-    label,
     contract_id: contractId,
-    network,
-    rule_triggered: rule?.type ?? 'AnyTransaction',
     transaction_hash: transactionHash,
+    event_type: triggered,
+    rule_triggered: triggered,
     timestamp,
     horizon_link: `${horizonUrl(network)}/transactions/${transactionHash}`,
     is_test: true,
+    label,
   }
+  if (rule?.type === 'LargeTransfer') {
+    payload.amount = rule.threshold_xlm
+  } else if (rule?.type === 'FunctionCalled') {
+    payload.function_name = rule.function_name.trim()
+  } else if (rule?.type === 'AdminFunctionCalled') {
+    payload.function_name = rule.function_names[0]?.trim()
 
   // Rule-specific fields match the variant tx-watch-core emits for that rule.
   switch (rule?.type) {
@@ -235,14 +283,16 @@ export function buildTestWebhookPayload({
     default:
       break
   }
-
   return payload
 }
 
 /**
- * The rule a test payload simulates, recovered from its rule-specific fields,
- * so the proxy can rebuild the same payload server-side (#261).
+ * Minimal shape of a queued sync retry. The runner only needs the scheduled
+ * attempt time to decide when to wake up; the actual retry execution is
+ * handled elsewhere.
  */
+export interface SyncRetryEntry {
+  nextAttemptAt: number
 export function ruleFromPayload(payload: AlertPayload): AlertRule | undefined {
   switch (payload.rule_triggered) {
     case 'LargeTransfer':
@@ -267,22 +317,12 @@ export function ruleFromPayload(payload: AlertPayload): AlertRule | undefined {
   }
 }
 
-const TEST_PAYLOAD_NETWORKS: Network[] = ['mainnet', 'testnet', 'futurenet']
-const MAX_TEST_LABEL_LENGTH = 100
+/** localStorage key holding the pending sync-retry queue. */
+export const SYNC_RETRY_QUEUE_KEY = 'sync-retry-queue'
 
-/** JSON with object keys sorted, so equal payloads compare equal. */
-function canonicalJson(value: unknown): string {
-  return JSON.stringify(value, (_key, v) =>
-    v && typeof v === 'object' && !Array.isArray(v)
-      ? Object.fromEntries(
-          Object.entries(v as Record<string, unknown>).sort(([a], [b]) =>
-            a < b ? -1 : a > b ? 1 : 0
-          )
-        )
-      : v
-  )
-}
-
+/** Read the pending sync-retry queue from localStorage, tolerating bad data. */
+export function readSyncRetryQueue(): SyncRetryEntry[] {
+  if (typeof window === 'undefined') return []
 /**
  * How far a test payload's `timestamp` (ms) may be from server time before
  * the proxy refuses to forward it (#401): 5 minutes, the same window
@@ -327,10 +367,44 @@ export function parseCanonicalTestPayload(
 ): AlertPayload | null {
   let p: Record<string, unknown>
   try {
-    p = JSON.parse(body)
+    const raw = window.localStorage.getItem(SYNC_RETRY_QUEUE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (entry): entry is SyncRetryEntry =>
+        entry != null && typeof entry.nextAttemptAt === 'number'
+    )
   } catch {
-    return null
+    return []
   }
+}
+
+/**
+ * Starts the sync-retry runner. Returns a cleanup function that stops the
+ * runner and removes all listeners/timers.
+ *
+ * Behaviour (issue #382):
+ * - No-op when the API is not configured.
+ * - Schedules a single timer for the earliest `nextAttemptAt` instead of
+ *   polling on a fixed interval.
+ * - Re-arms when the queue changes (storage events and a custom event).
+ * - Pauses while the tab is hidden and resumes when it becomes visible.
+ */
+export function startSyncRetries(
+  onRetry: (entry: SyncRetryEntry) => void = () => {}
+): () => void {
+  if (typeof window === 'undefined' || !isApiConfigured()) {
+    return () => {}
+  }
+
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let stopped = false
+
+  const clearTimer = () => {
+    if (timer !== null) {
+      clearTimeout(timer)
+      timer = null
   if (typeof p !== 'object' || p === null || Array.isArray(p)) return null
   if (p.is_test !== true) return null
   if (typeof p.contract_id !== 'string' || !isValidContractId(p.contract_id))
@@ -426,26 +500,36 @@ export async function sendTestWebhook(
     }
   }
 
-  const onTimeoutAbort = () => {
-    if (!combinedController.signal.aborted) {
-      combinedController.abort(new Error('timed out'))
+  const runDue = () => {
+    timer = null
+    if (stopped || document.hidden) return
+    const now = Date.now()
+    const queue = readSyncRetryQueue()
+    for (const entry of queue) {
+      if (entry.nextAttemptAt <= now) onRetry(entry)
     }
+    arm()
   }
 
-  if (externalSignal?.aborted) {
-    clearTimeout(timeoutId)
-    combinedController.abort(
-      externalSignal.reason || new Error('cancelled by caller')
+  const arm = () => {
+    clearTimer()
+    if (stopped || document.hidden) return
+    const queue = readSyncRetryQueue()
+    if (queue.length === 0) return
+    const earliest = queue.reduce(
+      (min, entry) => Math.min(min, entry.nextAttemptAt),
+      Number.POSITIVE_INFINITY
     )
-  } else {
-    externalSignal?.addEventListener('abort', onCallerAbort, { once: true })
-    internalController.signal.addEventListener('abort', onTimeoutAbort, {
-      once: true,
-    })
+    const delay = Math.max(0, earliest - Date.now())
+    timer = setTimeout(runDue, delay)
   }
 
-  const signal = combinedController.signal
+  const onVisibilityChange = () => {
+    if (document.hidden) clearTimer()
+    else arm()
+  }
 
+  const onQueueChange = () => arm()
   try {
     const body =
       format === 'json'
@@ -504,24 +588,18 @@ export async function sendTestWebhook(
       }
     }
 
-    const startedAt = Date.now()
-    const res = await fetch(webhookUrl, {
-      method: 'POST',
-      headers,
-      body,
-      signal,
-    })
-    const durationMs = Date.now() - startedAt
-    let bodySnippet: string | null = null
-    try {
-      bodySnippet = sanitizeBodySnippet(
-        new Uint8Array(await res.arrayBuffer()),
-        res.headers.get('content-type')
-      )
-    } catch {
-      // The status is what matters; a body that can't be read is not an error.
-    }
+  window.addEventListener('storage', onQueueChange)
+  window.addEventListener('sync-retry-queue-changed', onQueueChange)
+  document.addEventListener('visibilitychange', onVisibilityChange)
 
+  arm()
+
+  return () => {
+    stopped = true
+    clearTimer()
+    window.removeEventListener('storage', onQueueChange)
+    window.removeEventListener('sync-retry-queue-changed', onQueueChange)
+    document.removeEventListener('visibilitychange', onVisibilityChange)
     // The status is reported back rather than thrown on, so callers can show
     // the actual code; a non-2xx is still a failed delivery.
     return { status: res.status, ok: res.ok, durationMs, bodySnippet }

@@ -28,6 +28,7 @@ describe('apiFetch', () => {
     ;(global.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: true,
       status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
       text: () => Promise.resolve(JSON.stringify(mockData)),
     })
 
@@ -68,6 +69,62 @@ describe('apiFetch', () => {
     })
 
     await expect(apiFetch('/test')).rejects.toThrow('HTTP 500')
+  })
+
+  it('extracts a string message from a nested error object', async () => {
+    ;(global.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({ error: { code: 'x', message: 'y' } })
+        ),
+    })
+
+    await expect(apiFetch('/test')).rejects.toThrow('y')
+  })
+
+  it('extracts a string message from errors[0].message', async () => {
+    ;(global.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      status: 422,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({ errors: [{ message: 'first error' }] })
+        ),
+    })
+
+    await expect(apiFetch('/test')).rejects.toThrow('first error')
+  })
+
+  it('extracts the RFC 7807 detail field', async () => {
+    ;(global.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            type: 'about:blank',
+            title: 'Bad Request',
+            detail: 'The request was malformed',
+          })
+        ),
+    })
+
+    await expect(apiFetch('/test')).rejects.toThrow('The request was malformed')
+  })
+
+  it('throws an ApiError when a successful response is not JSON', async () => {
+    ;(global.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'text/html' }),
+      text: () => Promise.resolve('<!DOCTYPE html><html></html>'),
+    })
+
+    await expect(apiFetch('/test')).rejects.toThrow(
+      'API returned non-JSON response'
+    )
   })
 })
 
@@ -375,6 +432,17 @@ describe('sendTestWebhook', () => {
       contractId: 'CBCDEF',
     })
     expect(result).toMatchObject({ status: 404, ok: false })
+    expect(typeof result.error).toBe('string')
+  })
+})
+
+describe('isApiConfigured', () => {
+  it('reflects whether NEXT_PUBLIC_API_URL is set', () => {
+    vi.stubEnv('NEXT_PUBLIC_API_URL', '')
+    expect(isApiConfigured()).toBe(false)
+    vi.stubEnv('NEXT_PUBLIC_API_URL', 'https://api.example.com')
+    expect(isApiConfigured()).toBe(true)
+    vi.unstubAllEnvs()
   })
 })
 
@@ -401,7 +469,38 @@ describe('parseCanonicalTestPayload timestamp window (#401)', () => {
       })
     ).not.toBeNull()
   })
+})
 
+describe('joinUrl', () => {
+  it('joins base and path without duplicate slashes', () => {
+    expect(joinUrl('https://api.example.com/', '/contracts')).toBe(
+      'https://api.example.com/contracts'
+    )
+    expect(joinUrl('https://api.example.com', 'contracts')).toBe(
+      'https://api.example.com/contracts'
+    )
+  })
+})
+
+describe('removeContract', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('sends a DELETE request to the contract endpoint', async () => {
+    ;(global.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      status: 204,
+      headers: new Headers(),
+      text: () => Promise.resolve(''),
+    })
+
+    await removeContract('CBCDEF')
+
+    const [url, init] = (global.fetch as unknown as ReturnType<typeof vi.fn>)
+      .mock.calls[0]
+    expect(url).toContain('/contracts/CBCDEF')
+    expect((init as RequestInit).method).toBe('DELETE')
   it.each([
     ['just past the window', NOW - TEST_PAYLOAD_MAX_SKEW_MS - 1],
     ['just ahead of the window', NOW + TEST_PAYLOAD_MAX_SKEW_MS + 1],
