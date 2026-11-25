@@ -482,3 +482,15 @@ describe('AlertRuleBadge tooltip accessibility', () => {
     expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
   })
 })
+
+describe('RuleBuilder rule description', () => {
+  it('renders the selected rule description once', () => {
+    render(<RuleBuilder rules={[]} onChange={vi.fn()} />)
+    const description = (screen.getByRole('combobox') as HTMLSelectElement)
+      .getAttribute('aria-describedby')!
+      .split(' ')
+      .map((id) => document.getElementById(id)?.textContent)
+      .find(Boolean)!
+    expect(screen.getAllByText(description)).toHaveLength(1)
+  })
+})

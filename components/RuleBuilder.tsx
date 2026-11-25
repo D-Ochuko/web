@@ -362,9 +362,6 @@ export default function RuleBuilder({
             ))}
           </select>
           <p id={typeHintId} className="text-xs text-zinc-500 mt-1">{getRuleMeta(draftType).description}</p>
-          <p className="text-xs text-zinc-500 mt-1">
-            {getRuleMeta(draftType).description}
-          </p>
         </div>
 
         {draftType === 'LargeTransfer' && (
