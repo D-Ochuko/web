@@ -85,6 +85,30 @@ describe('wallet state broadcast', () => {
     expect(localStorage.getItem('freighter_public_key')).toBeNull()
   })
 
+  it('clears the global public key on disconnect', async () => {
+    mockFreighter(true)
+
+    render(<FreighterConnect />)
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: 'Disconnect' })
+      ).toBeInTheDocument()
+    })
+
+    window.__freighterPublicKey = MOCK_PUBLIC_KEY
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: /Connect Freighter/ })
+      ).toBeInTheDocument()
+    })
+    expect(window.__freighterPublicKey).toBeUndefined()
+    expect(localStorage.getItem('freighter_public_key')).toBeNull()
+  })
+
   it('updates the badge and the other button on connect', async () => {
     mockFreighter(false)
 
@@ -219,6 +243,49 @@ describe('wallet state broadcast', () => {
 
     unsubscribe()
     otherTab.close()
+  })
+
+  it('keeps the shared channel open for remaining subscribers after one unsubscribes', async () => {
+    const firstReceived: Array<{ publicKey: string | null }> = []
+    const secondReceived: Array<{ publicKey: string | null }> = []
+
+    const unsubscribeFirst = subscribeWallet((detail) => {
+      firstReceived.push({ publicKey: detail.publicKey })
+    })
+    const unsubscribeSecond = subscribeWallet((detail) => {
+      secondReceived.push({ publicKey: detail.publicKey })
+    })
+
+    // Unmounting one wallet-aware component must not tear down the channel
+    // that the other subscribers are still listening on.
+    unsubscribeFirst()
+
+    const otherTab = new BroadcastChannel('txwatch-wallet')
+    otherTab.postMessage({ publicKey: MOCK_PUBLIC_KEY })
+
+    await waitFor(() => {
+      expect(secondReceived).toEqual([{ publicKey: MOCK_PUBLIC_KEY }])
+    })
+    expect(firstReceived).toEqual([])
+
+    // The channel is only closed once the last subscriber goes away.
+    unsubscribeSecond()
+    otherTab.close()
+
+    const afterCloseReceived: Array<{ publicKey: string | null }> = []
+    const unsubscribeThird = subscribeWallet((detail) => {
+      afterCloseReceived.push({ publicKey: detail.publicKey })
+    })
+
+    const lateTab = new BroadcastChannel('txwatch-wallet')
+    lateTab.postMessage({ publicKey: null })
+
+    await waitFor(() => {
+      expect(afterCloseReceived).toEqual([{ publicKey: null }])
+    })
+
+    unsubscribeThird()
+    lateTab.close()
   })
 
   it('falls back to the local event when BroadcastChannel is unavailable', async () => {

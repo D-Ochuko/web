@@ -12,6 +12,16 @@
  *    reported as "extension unavailable".
  * 2. Errors are returned as an `error` field on the resolved value rather than
  *    thrown, so they are converted into thrown errors here.
+ *
+ * Security note (issue #521): connecting trusts whatever the wallet reports.
+ * `requestAccess()` / `getAddress()` return a public key, and that key is
+ * treated as proof that the user controls the wallet — there is no
+ * signed-challenge step, so the app never cryptographically verifies ownership.
+ * For a monitoring tool with no fund custody this is acceptable. If any future
+ * feature ties permissions (e.g. who may edit a contract's rules) to wallet
+ * identity, it MUST implement a signed-challenge auth flow (server-issued
+ * nonce, signed via `signWithFreighter`, verified before granting access)
+ * rather than relying on the public key alone.
  */
 
 import {
@@ -23,6 +33,7 @@ import {
 } from '@stellar/freighter-api'
 
 import type { Network } from '@/types'
+import { clearUserDisconnected, isUserDisconnected } from '@/lib/disconnectFlag'
 
 const FREIGHTER_INSTALL_URL = 'https://www.freighter.app/'
 
@@ -51,15 +62,17 @@ const FREIGHTER_NETWORK_BY_CHAIN: Record<Network, string> = {
 }
 
 /** Reverse of {@link FREIGHTER_NETWORK_BY_CHAIN}: Freighter network id → app network. */
-export const FREIGHTER_CHAIN_BY_NETWORK: Record<string, Network> = Object.fromEntries(
-  (Object.entries(FREIGHTER_NETWORK_BY_CHAIN) as [Network, string][]).map(([chain, network]) => [
-    network,
-    chain,
-  ])
-)
+export const FREIGHTER_CHAIN_BY_NETWORK: Record<string, Network> =
+  Object.fromEntries(
+    (Object.entries(FREIGHTER_NETWORK_BY_CHAIN) as [Network, string][]).map(
+      ([chain, network]) => [network, chain]
+    )
+  )
 
 /** Maps a Freighter network id to the app network, or null when unsupported. */
-export function mapFreighterNetwork(freighterNetwork: string | null): Network | null {
+export function mapFreighterNetwork(
+  freighterNetwork: string | null
+): Network | null {
   if (!freighterNetwork) return null
   return FREIGHTER_CHAIN_BY_NETWORK[freighterNetwork] ?? null
 }
@@ -102,11 +115,21 @@ export class FreighterTimeoutError extends Error {
   }
 }
 
+/**
+ * Result of a connect flow.
+ *
+ * TODO(#521): `publicKey` is unverified — it is whatever the wallet reported,
+ * not proof of ownership. See the module security note before using it for
+ * authorisation.
+ */
 export interface FreighterSession {
   publicKey: string
-  /** Freighter network id, e.g. `"TESTNET"`. */
-  network: string
-  networkPassphrase: string
+  /**
+   * Freighter network id, e.g. `"TESTNET"`. `null` when the approved wallet did
+   * not report its network in time; callers should re-read it asynchronously.
+   */
+  network: string | null
+  networkPassphrase: string | null
 }
 
 function withTimeout<T>(
@@ -197,6 +220,14 @@ export function isNetworkMatch(
   )
 }
 
+type FreighterConnection = {
+  publicKey: string | null
+  network: string | null
+  networkPassphrase: string | null
+} | null
+
+let pendingConnectionProbe: Promise<FreighterConnection> | null = null
+
 async function readNetworkDetails(): Promise<{
   network: string
   networkPassphrase: string
@@ -213,11 +244,14 @@ async function readNetworkDetails(): Promise<{
  * Current wallet state, or null when the extension is not reachable.
  * `publicKey` is null when the extension is installed but locked/not approved.
  */
-export async function readFreighterConnection(): Promise<{
-  publicKey: string | null
-  network: string | null
-  networkPassphrase: string | null
-} | null> {
+async function probeFreighterConnection(): Promise<FreighterConnection> {
+  // The user disconnected in-app: the site is still approved in Freighter, so
+  // probing would silently reconnect them. Report "disconnected" until they
+  // press Connect again.
+  if (isUserDisconnected()) {
+    return { publicKey: null, network: null, networkPassphrase: null }
+  }
+
   let connected = false
   try {
     const result = await withTimeout(isConnected())
@@ -254,7 +288,36 @@ export async function readFreighterConnection(): Promise<{
   }
 }
 
-/** Explicit connect flow — prompts the user to approve this site. */
+/**
+ * Share an in-flight extension probe between wallet consumers mounting
+ * together. The next probe is allowed after this one settles so later
+ * navigations still observe changes made in Freighter.
+ */
+export function readFreighterConnection(): Promise<FreighterConnection> {
+  if (pendingConnectionProbe) return pendingConnectionProbe
+
+  const probe = probeFreighterConnection()
+  pendingConnectionProbe = probe
+  void probe.then(
+    () => {
+      if (pendingConnectionProbe === probe) pendingConnectionProbe = null
+    },
+    () => {
+      if (pendingConnectionProbe === probe) pendingConnectionProbe = null
+    }
+  )
+
+  return probe
+}
+
+/**
+ * Explicit connect flow — prompts the user to approve this site.
+ *
+ * TODO(#521): this only proves the wallet is reachable and approved for this
+ * site; it does not verify ownership of the returned public key (no
+ * signed-challenge step). Do not gate permissions on `publicKey` until a
+ * signed-challenge auth flow is implemented — see the module security note.
+ */
 export async function connectFreighter(): Promise<FreighterSession> {
   if (!(await isExtensionAvailable())) {
     throw new FreighterUnavailableError()
@@ -278,6 +341,8 @@ export async function connectFreighter(): Promise<FreighterSession> {
       throw new FreighterRejectedError()
     }
     address = result.address
+    // An explicit Connect ends the user's earlier in-app disconnect.
+    clearUserDisconnected()
   } catch (error) {
     if (
       error instanceof FreighterRejectedError ||
@@ -291,8 +356,15 @@ export async function connectFreighter(): Promise<FreighterSession> {
     )
   }
 
-  const details = await readNetworkDetails()
-  return { publicKey: address, ...details }
+  // The user has already approved at this point, so a failing or slow
+  // getNetworkDetails must not be reported as "Freighter not installed".
+  // Return the session without a network; the caller re-reads it later.
+  try {
+    const details = await readNetworkDetails()
+    return { publicKey: address, ...details }
+  } catch {
+    return { publicKey: address, network: null, networkPassphrase: null }
+  }
 }
 
 /**

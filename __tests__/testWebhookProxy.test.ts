@@ -30,11 +30,13 @@ import type { NextRequest } from 'next/server'
 import { POST } from '@/app/api/test-webhook/route'
 import { deliverWebhook } from '@/lib/webhookProxy'
 import { buildTestWebhookPayload } from '@/lib/api'
+import { formatWebhookBody } from '@/lib/webhookFormat'
 import { SIGNATURE_HEADER, signWebhookPayload } from '@/lib/webhookSignature'
 
 const CID = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4'
 let ipCounter = 0
 
+/** `ip` is the socket address (NextRequest.ip), not a forwarded header. */
 function request(
   body: unknown,
   headers: Record<string, string> = { 'sec-fetch-site': 'same-origin' },
@@ -42,7 +44,8 @@ function request(
 ) {
   const text = typeof body === 'string' ? body : JSON.stringify(body)
   return {
-    headers: new Headers({ 'x-forwarded-for': ip, ...headers }),
+    headers: new Headers(headers),
+    ip,
     text: async () => text,
   } as unknown as NextRequest
 }
@@ -51,7 +54,11 @@ const testBody = (
   overrides: Partial<Parameters<typeof buildTestWebhookPayload>[0]> = {}
 ) =>
   JSON.stringify(
-    buildTestWebhookPayload({ contractId: CID, network: 'testnet', ...overrides })
+    buildTestWebhookPayload({
+      contractId: CID,
+      network: 'testnet',
+      ...overrides,
+    })
   )
 
 const valid = {
@@ -73,6 +80,86 @@ describe('POST /api/test-webhook', () => {
     expect(String(url)).toBe(valid.url)
     expect(sent).toBe(body)
     expect(headers[SIGNATURE_HEADER]).toBe(signature)
+  })
+
+  describe('timestamp window (#401)', () => {
+    const MIN = 60_000
+
+    it.each([
+      ['six minutes old', -6 * MIN],
+      ['six minutes ahead', 6 * MIN],
+      ['years ahead', 3 * 365 * 24 * 60 * MIN],
+      ['from 1970', -Date.now() + 42],
+    ])('refuses a payload %s', async (_label, offset) => {
+      const res = await POST(
+        request({
+          ...valid,
+          body: testBody({ timestamp: Date.now() + offset }),
+        })
+      )
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toMatch(/server time/)
+      expect(deliverWebhook).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['four minutes old', -4 * MIN],
+      ['four minutes ahead', 4 * MIN],
+    ])('accepts a payload %s', async (_label, offset) => {
+      const res = await POST(
+        request({
+          ...valid,
+          body: testBody({ timestamp: Date.now() + offset }),
+        })
+      )
+      expect(res.status).toBe(200)
+    })
+
+    it('refuses a fresh body whose signature t= is stale', async () => {
+      const body = testBody()
+      const t = Math.floor(Date.now() / 1000) - 10 * 60
+      const signature = await signWebhookPayload('whsec_x', body, t)
+      const res = await POST(request({ url: valid.url, body, signature }))
+      expect(res.status).toBe(400)
+      expect(deliverWebhook).not.toHaveBeenCalled()
+    })
+
+    it('refuses a signature t= dated in the future', async () => {
+      const body = testBody()
+      const t = Math.floor(Date.now() / 1000) + 10 * 60
+      const signature = await signWebhookPayload('whsec_x', body, t)
+      const res = await POST(request({ url: valid.url, body, signature }))
+      expect(res.status).toBe(400)
+    })
+
+    it('refuses the legacy sha256= signature format', async () => {
+      const res = await POST(
+        request({ ...valid, signature: `sha256=${'a'.repeat(64)}` })
+      )
+      expect(res.status).toBe(400)
+      expect(deliverWebhook).not.toHaveBeenCalled()
+    })
+  it.each([
+    ['the legacy sha256= form', `sha256=${'a'.repeat(64)}`],
+    ['a missing timestamp', `v1=${'a'.repeat(64)}`],
+    ['a non-numeric timestamp', `t=abc,v1=${'a'.repeat(64)}`],
+    ['a truncated MAC', `t=1700000000,v1=${'a'.repeat(62)}`],
+    ['a non-hex MAC', `t=1700000000,v1=${'z'.repeat(64)}`],
+    ['no v1 entry', 't=1700000000'],
+  ])('rejects a signature with %s', async (_label, signature) => {
+    const res = await POST(request({ ...valid, signature }))
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({ error: 'Invalid signature' })
+    expect(deliverWebhook).not.toHaveBeenCalled()
+  })
+
+  it('accepts a timestamped signature with extra v1 entries', async () => {
+    const signature = await signWebhookPayload('whsec_rotated', valid.body)
+    const withExtra = `${signature},v1=${'b'.repeat(64)}`
+    const res = await POST(request({ ...valid, signature: withExtra }))
+    expect(res.status).toBe(200)
+    const [, , headers] = vi.mocked(deliverWebhook).mock.calls[0]
+    expect(headers[SIGNATURE_HEADER]).toBe(withExtra)
   })
 
   it('sends no signature header when the browser sent none', async () => {
@@ -106,7 +193,10 @@ describe('POST /api/test-webhook', () => {
 
   it.each([
     ['arbitrary JSON', '{"spam":true}'],
-    ['a non-test payload', testBody().replace('"is_test":true', '"is_test":false')],
+    [
+      'a non-test payload',
+      testBody().replace('"is_test":true', '"is_test":false'),
+    ],
     [
       'a payload with extra fields',
       JSON.stringify({ ...JSON.parse(testBody()), extra: 'x' }),
@@ -174,8 +264,64 @@ describe('POST /api/test-webhook', () => {
     expect(limited.headers.get('Retry-After')).toMatch(/^\d+$/)
   })
 
+  describe('rate-limit client IP', () => {
+    const sameOrigin = { 'sec-fetch-site': 'same-origin' }
+
+    afterEach(() => vi.unstubAllEnvs())
+
+    it('ignores a spoofed X-Forwarded-For when no hops are trusted', async () => {
+      const statuses: number[] = []
+      for (let i = 0; i < 11; i++) {
+        const res = await POST(
+          request(
+            valid,
+            { ...sameOrigin, 'x-forwarded-for': `10.30.0.${i}` },
+            '192.0.2.10'
+          )
+        )
+        statuses.push(res.status)
+      }
+      expect(statuses.slice(0, 10).every((s) => s === 200)).toBe(true)
+      expect(statuses[10]).toBe(429)
+    })
+
+    it('keys the limit on the trusted hop when TRUSTED_PROXY_HOPS=1', async () => {
+      vi.stubEnv('TRUSTED_PROXY_HOPS', '1')
+      const statuses: number[] = []
+      for (let i = 0; i < 11; i++) {
+        // Each request claims a new spoofed client on the left; the proxy
+        // appended the real client (192.0.2.20) on the right.
+        const res = await POST(
+          request(
+            valid,
+            { ...sameOrigin, 'x-forwarded-for': `10.40.0.${i}, 192.0.2.20` },
+            '10.0.0.1'
+          )
+        )
+        statuses.push(res.status)
+      }
+      expect(statuses.slice(0, 10).every((s) => s === 200)).toBe(true)
+      expect(statuses[10]).toBe(429)
+    })
+
+    it('gives distinct real clients behind the proxy separate windows', async () => {
+      vi.stubEnv('TRUSTED_PROXY_HOPS', '1')
+      const from = (client: string) =>
+        request(
+          valid,
+          { ...sameOrigin, 'x-forwarded-for': `6.6.6.6, ${client}` },
+          '10.0.0.1'
+        )
+      for (let i = 0; i < 10; i++) {
+        expect((await POST(from('192.0.2.30'))).status).toBe(200)
+      }
+      expect((await POST(from('192.0.2.30'))).status).toBe(429)
+      expect((await POST(from('192.0.2.31'))).status).toBe(200)
+    })
+  })
+
   it('caps the body size', async () => {
-    const res = await POST(request({ ...valid, padding: 'x'.repeat(5000) }))
+    const res = await POST(request({ ...valid, padding: 'x'.repeat(9000) }))
     expect(res.status).toBe(413)
   })
 
@@ -200,5 +346,70 @@ describe('POST /api/test-webhook', () => {
     const res = await POST(request({ ...valid, url }))
     expect(res.status).toBe(403)
     expect(deliverWebhook).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/test-webhook formats and headers (#408, #409)', () => {
+  const alertPayload = buildTestWebhookPayload({
+    contractId: CID,
+    network: 'testnet',
+  })
+
+  it('accepts a Slack body that renders from the alert it carries', async () => {
+    const body = formatWebhookBody(alertPayload, 'slack')
+    const res = await POST(
+      request({
+        url: 'https://hooks.slack.com/services/T/B/X',
+        body,
+        format: 'slack',
+        payload: alertPayload,
+      })
+    )
+    expect(res.status).toBe(200)
+    const [, sent] = vi.mocked(deliverWebhook).mock.calls.at(-1)!
+    expect(sent).toBe(body)
+  })
+
+  it('rejects a formatted body that does not match the alert', async () => {
+    const res = await POST(
+      request({
+        url: 'https://hooks.slack.com/services/T/B/X',
+        body: JSON.stringify({ text: 'anything the caller likes' }),
+        format: 'slack',
+        payload: alertPayload,
+      })
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it('rejects an unknown format', async () => {
+    const res = await POST(
+      request({
+        url: valid.url,
+        body: valid.body,
+        format: 'teams',
+        payload: alertPayload,
+      })
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it('forwards only allow-listed headers', async () => {
+    const res = await POST(
+      request({
+        ...valid,
+        headers: {
+          Authorization: 'Bearer test-token',
+          Host: 'evil.example',
+          'X-Custom': 'not-allowed',
+        },
+      })
+    )
+    expect(res.status).toBe(200)
+    const [, , headers] = vi.mocked(deliverWebhook).mock.calls.at(-1)!
+    expect(headers.Authorization).toBe('Bearer test-token')
+    expect(headers).not.toHaveProperty('Host')
+    expect(headers).not.toHaveProperty('X-Custom')
+    expect(headers['Content-Type']).toBe('application/json')
   })
 })

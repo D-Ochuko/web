@@ -1,6 +1,7 @@
-import { apiFetch, isApiConfigured, type ApiError } from '@/lib/api'
+import { apiFetch, type ApiError } from '@/lib/api'
 import { addAlert, getAlerts, getAllAlerts } from '@/lib/storage'
 import { isAlertRuleType, type AlertPayload, type Network } from '@/types'
+import type { AlertEnvelope } from '@/lib/api-types'
 
 /**
  * Assumed tx-watch-core contract (not verified against a live core):
@@ -17,7 +18,6 @@ export const ALERT_POLL_INTERVAL_MS = 30000
 /** Upper bound for the polling interval while the core keeps failing. */
 export const ALERT_POLL_MAX_INTERVAL_MS = 5 * 60 * 1000
 
-
 export async function fetchAlerts(
   contractId: string,
   network: Network | string,
@@ -32,7 +32,7 @@ export async function fetchAlerts(
   if (!body) return []
   const list = Array.isArray(body)
     ? body
-    : ((body as { alerts?: unknown }).alerts ?? [])
+    : ((body as AlertEnvelope).alerts ?? [])
   if (!Array.isArray(list))
     throw new Error('Invalid alerts response: expected an array of alerts')
   return list.map((entry, index) => {
@@ -75,11 +75,6 @@ export function validateAlertPayload(entry: unknown): AlertPayload | string {
   if (a.is_test !== undefined && typeof a.is_test !== 'boolean')
     return 'is_test must be a boolean'
   return entry as AlertPayload
-  const body = await apiFetch<
-    AlertPayload[] | { alerts: AlertPayload[] } | undefined
-  >(`/alerts?${qs.toString()}`, { signal })
-  if (!body) return []
-  return Array.isArray(body) ? body : (body.alerts ?? [])
 }
 
 /**
@@ -115,7 +110,9 @@ export function filterNewAlerts(
  * timestamp per contract. Keyed by `${network}:${contract_id}` to avoid
  * cross-network mixing, and also by `contract_id` for backward compatibility.
  */
-export function getLatestAlertTimestamps(alerts?: AlertPayload[]): Record<string, number> {
+export function getLatestAlertTimestamps(
+  alerts?: AlertPayload[]
+): Record<string, number> {
   const latest: Record<string, number> = {}
   const list = alerts ?? getAllAlerts()
   for (const alert of list) {

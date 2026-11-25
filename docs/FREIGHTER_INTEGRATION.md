@@ -5,6 +5,7 @@ This guide explains how the dashboard integrates with the Freighter wallet exten
 ## Overview
 
 Freighter is a browser extension that manages Stellar keypairs and signs transactions. The dashboard uses it to:
+
 - Authenticate users (get their public key)
 - Verify the user's current network (Mainnet, Testnet, Futurenet)
 - Sign and submit transactions to the Stellar network
@@ -19,13 +20,13 @@ reads a `window.freighter` object or hand-writes a `declare global` type for it.
 
 The functions the dashboard uses:
 
-| Function | Returns | Used for |
-|----------|---------|----------|
-| `isConnected()` | `{ isConnected }` | Is the extension installed and this site already approved? |
-| `requestAccess()` | `{ address }` | Explicit connect — prompts the user to approve the site |
-| `getAddress()` | `{ address }` | Read the active public key of an approved session |
-| `getNetworkDetails()` | `{ network, networkUrl, networkPassphrase, sorobanRpcUrl? }` | Which network the wallet is on |
-| `signTransaction(xdr, opts)` | `{ signedTxXdr, signerAddress }` | Sign a base64 XDR envelope |
+| Function                     | Returns                                                      | Used for                                                   |
+| ---------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------- |
+| `isConnected()`              | `{ isConnected }`                                            | Is the extension installed and this site already approved? |
+| `requestAccess()`            | `{ address }`                                                | Explicit connect — prompts the user to approve the site    |
+| `getAddress()`               | `{ address }`                                                | Read the active public key of an approved session          |
+| `getNetworkDetails()`        | `{ network, networkUrl, networkPassphrase, sorobanRpcUrl? }` | Which network the wallet is on                             |
+| `signTransaction(xdr, opts)` | `{ signedTxXdr, signerAddress }`                             | Sign a base64 XDR envelope                                 |
 
 Two behaviours of the package drive the wrapper design in `lib/freighter.ts`:
 
@@ -43,12 +44,12 @@ naming live in one place.
 
 ```ts
 import {
-  connectFreighter,        // explicit connect flow (requestAccess + network details)
-  isExtensionAvailable,    // is the extension installed and answering?
+  connectFreighter, // explicit connect flow (requestAccess + network details)
+  isExtensionAvailable, // is the extension installed and answering?
   readFreighterConnection, // current session, or null when unavailable
-  getWalletNetwork,        // "TESTNET" | "PUBLIC" | "FUTURENET", or null
-  isNetworkMatch,          // compare a dashboard Network with the wallet network
-  signWithFreighter,       // sign a base64 XDR envelope
+  getWalletNetwork, // "TESTNET" | "PUBLIC" | "FUTURENET", or null
+  isNetworkMatch, // compare a dashboard Network with the wallet network
+  signWithFreighter, // sign a base64 XDR envelope
   openFreighterInstallPage,
   FreighterUnavailableError,
   FreighterRejectedError,
@@ -84,8 +85,8 @@ if (connection === null) {
 }
 ```
 
-This is what `FreighterConnect`, `useFreighterConnection`, `useWallet`, and
-`WalletStatusBadge` all use to render their state.
+This is what `FreighterConnect`, `useWalletState`, and `WalletStatusBadge` all
+use to render their state.
 
 ### 3. Explicit connect
 
@@ -127,16 +128,26 @@ const signedXdr = await signWithFreighter(txXdr, {
 ### FreighterConnect Component
 
 `components/FreighterConnect.tsx` wraps `lib/freighter.ts` and provides:
+
 - Connection state management
 - Error handling (extension not installed, user rejection)
 - UI for connected/disconnected states
 - Disconnect button
 
-Connection state is not local to the button. `hooks/useWalletState.ts` probes the
-extension on mount and then subscribes to a `txwatch:wallet` CustomEvent, so the
-header button, the landing-page button, `WalletStatusBadge` and any form gate all
-show the same state. Disconnecting from one of them updates all of them, clears
+Connection state is not local to the button. `hooks/useWalletState.ts` is the
+single source of truth for wallet connection state. It probes the extension on
+mount and then subscribes to a `txwatch:wallet` CustomEvent, so the header
+button, the landing-page button, `WalletStatusBadge` and any form gate all show
+the same state. Disconnecting from one of them updates all of them, clears
 `localStorage['freighter_public_key']` and removes `window.__freighterPublicKey`.
+
+> **One hook, not three.** Earlier versions of the dashboard shipped
+> `lib/useFreighter.ts`, `lib/useFreighterConnection.ts` and `lib/useWallet.ts`
+> alongside `hooks/useWalletState.ts`. These overlapped in responsibility
+> (connection state, public key) and risked drifting out of sync with the
+> localStorage/window-global state. They have been consolidated into
+> `useWalletState`; do not reintroduce per-component wallet hooks. If you need
+> connection state, import `useWalletState` (see issue #522).
 
 Usage:
 
@@ -159,6 +170,7 @@ import { useWalletState } from '@/hooks/useWalletState'
 
 const { publicKey, publish } = useWalletState()
 ```
+
 ### Nothing is persisted
 
 The connected public key is deliberately **not** written to `localStorage`. The
@@ -169,19 +181,34 @@ approved in Freighter until the user revokes it there.
 
 ### Checking Connection in Forms
 
-To verify the wallet is connected before saving data, use the connection hook
-rather than checking for the extension's presence:
+To verify the wallet is connected before saving data, use the shared wallet
+state hook rather than checking for the extension's presence:
 
 ```ts
-import { useFreighterConnection } from '@/lib/useFreighterConnection'
+import { useWalletState } from '@/hooks/useWalletState'
 
-const { isConnected, loading } = useFreighterConnection()
+const { publicKey, loading } = useWalletState()
 
-if (!isConnected) {
+if (!publicKey) {
   setError('Connect your Freighter wallet first')
   return
 }
 ```
+
+### Connection is not signature-verified
+
+Connecting only proves that the extension reports a public key — the app never
+asks the user to sign a challenge, so a reported address is **not** proof of
+ownership of the corresponding keypair. For a read-only monitoring dashboard
+this is acceptable, because no funds are custodied and no permissions are tied
+to the address.
+
+**Before any feature ties permissions to wallet identity** (for example, "who
+may edit a contract's rules"), a signed-challenge authentication flow must be
+added: the server issues a nonce, the wallet signs it via `signWithFreighter`,
+and the server verifies the signature against the claimed public key before
+granting any rights. Until then, treat the connected public key as a display
+value only. (See issue #521.)
 
 ## Network Mismatch Handling
 
@@ -196,7 +223,9 @@ const walletNetwork = await getWalletNetwork() // "TESTNET", "PUBLIC", "FUTURENE
 const selectedNetwork = 'testnet' // from the form
 
 if (!isNetworkMatch(selectedNetwork, walletNetwork)) {
-  console.warn(`Wallet is on ${walletNetwork}, but contract is on ${selectedNetwork}`)
+  console.warn(
+    `Wallet is on ${walletNetwork}, but contract is on ${selectedNetwork}`
+  )
   // Show warning to user
 }
 ```
@@ -205,12 +234,13 @@ if (!isNetworkMatch(selectedNetwork, walletNetwork)) {
 
 Common error scenarios:
 
-| Scenario | Signal | Handling |
-|----------|--------|----------|
-| Extension not installed | `isExtensionAvailable()` is `false`, or a call times out | Prompt to install |
-| User rejects connection | `requestAccess()` resolves with `error` | Throw `FreighterRejectedError`, show "Connection rejected" |
-| Network mismatch | `getWalletNetwork()` returns a different value | Warn user to switch networks |
-| Transaction signing fails | `signTransaction()` resolves with `error` | Throw `FreighterRejectedError`, show error message |
+| Scenario                  | Signal                                                   | Handling                                                                                  |
+| ------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Extension not installed   | `isExtensionAvailable()` is `false`, or a call times out | Prompt to install                                                                         |
+| User rejects connection   | `requestAccess()` resolves with `error`                  | Throw `FreighterRejectedError`, show "Connection rejected"                                |
+| Address not proven        | No signed challenge is performed on connect              | Do not grant permissions based on the public key alone; add a signed-challenge flow first |
+| Network mismatch          | `getWalletNetwork()` returns a different value           | Warn user to switch networks                                                              |
+| Transaction signing fails | `signTransaction()` resolves with `error`                | Throw `FreighterRejectedError`, show error message                                        |
 
 ## Testing
 
@@ -242,5 +272,8 @@ extension that answers the same message protocol the real one does:
 ```ts
 import { DEFAULT_FREIGHTER_MOCK, installFreighterMock } from './freighter-mock'
 
-await context.addInitScript(installFreighterMock, { ...DEFAULT_FREIGHTER_MOCK, connected: true })
+await context.addInitScript(installFreighterMock, {
+  ...DEFAULT_FREIGHTER_MOCK,
+  connected: true,
+})
 ```

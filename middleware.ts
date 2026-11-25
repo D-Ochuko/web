@@ -16,6 +16,10 @@ export function middleware(request: NextRequest) {
     `script-src ${cspAllowList} 'nonce-${nonce}'`,
     `connect-src ${cspAllowList} wss:`,
     "frame-src 'self' https://connect.freighter.app",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
   ].join('; ')
 
   const requestHeaders = new Headers(request.headers)
